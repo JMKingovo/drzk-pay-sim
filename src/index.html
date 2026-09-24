@@ -418,21 +418,19 @@
 
       <!-- 2. 支付业务场景 -->
       <div class="config-group">
-        <div class="config-label">业务场景模式</div>
+        <div class="config-label">
+          <span>业务场景模式</span>
+          <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;" id="sceneDescHint">扫码即放行开闸</span>
+        </div>
         <div class="radio-pill-group">
-          <div class="radio-pill active" id="pillOut" onclick="selectScene('OUT_LOT')">出口扫码开闸 (带通道DSN)</div>
-          <div class="radio-pill" id="pillIn" onclick="selectScene('IN_LOT')">场内提前扫码 (车辆在场)</div>
+          <div class="radio-pill active" id="pillOut" onclick="selectScene('OUT_LOT')">出口扫码开闸</div>
+          <div class="radio-pill" id="pillIn" onclick="selectScene('IN_LOT')">场内提前缴费 (车仍在场)</div>
         </div>
         <input type="hidden" id="sceneMode" value="OUT_LOT">
+        <input type="hidden" id="dsn" value="SIM21712648130131729">
       </div>
 
-      <!-- 3. 出口 DSN 与通道 -->
-      <div class="config-group" id="dsnContainer">
-        <div class="config-label">出口通道 DSN</div>
-        <input type="text" id="dsn" class="text-input" value="SIM21712648130131729">
-      </div>
-
-      <!-- 4. 手动覆盖 (备用) -->
+      <!-- 3. 手动覆盖 (备用) -->
       <div class="config-group">
         <div class="config-label">
           <span>手工车牌与查费 (可选)</span>
@@ -575,7 +573,27 @@
       document.getElementById("sceneMode").value = sceneVal;
       document.getElementById("pillOut").classList.toggle("active", sceneVal === "OUT_LOT");
       document.getElementById("pillIn").classList.toggle("active", sceneVal === "IN_LOT");
-      document.getElementById("dsnContainer").style.display = sceneVal === "OUT_LOT" ? "block" : "none";
+      const hint = document.getElementById("sceneDescHint");
+      const mainBtn = document.getElementById("mainPayBtn");
+      const autoOutCb = document.getElementById("autoOut");
+
+      if (sceneVal === "OUT_LOT") {
+        hint.innerText = "扫码即放行开闸";
+        autoOutCb.checked = true;
+        if (currentPopupData) {
+          mainBtn.innerHTML = `<span>立即为 [${currentPopupData.car_no}] 缴纳 ${currentPopupData.money.toFixed(2)} 元并开闸</span>`;
+        } else {
+          mainBtn.innerHTML = `<span>立即代缴开闸放行</span>`;
+        }
+      } else {
+        hint.innerText = "车辆在车位预付，不触发开闸";
+        autoOutCb.checked = false;
+        if (currentPopupData) {
+          mainBtn.innerHTML = `<span>立即缴纳场内预付费 [${currentPopupData.car_no}] (车不放行)</span>`;
+        } else {
+          mainBtn.innerHTML = `<span>立即缴纳场内预付费 (车不放行)</span>`;
+        }
+      }
     }
 
     // 轮询当前岗亭弹窗

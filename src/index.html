@@ -376,21 +376,18 @@
         </div>
       </div>
 
-      <!-- 2. 独立的场内扫码预缴工具 -->
-      <div class="config-group" style="margin-top: 10px;">
+      <!-- 2. 手工车牌查费与场内预缴 -->
+      <div class="config-group" style="margin-top: 14px;">
         <div class="config-label">
-          <span>场内扫码预缴测试 (车仍在场)</span>
+          <span>手工车牌查费与场内预缴</span>
+          <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;">车在场内提前扫码 / 查费</span>
         </div>
         
         <div class="inner-tool-box">
-          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-            模拟车主在场内车位扫码提前缴费，仅产生线上缴费流水，不触发道闸开闸
-          </div>
-
-          <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; flex-direction: column; gap: 10px;">
             <div class="input-action-row">
-              <input type="text" id="innerCarNo" class="text-input" placeholder="输入场内车牌号...">
-              <button type="button" class="btn-secondary" onclick="queryInnerFee()">查在场费</button>
+              <input type="text" id="innerCarNo" class="text-input" placeholder="输入车牌号 (例如: 粤B12345)" onkeydown="if(event.key==='Enter') queryInnerFee()">
+              <button type="button" class="btn-secondary" onclick="queryInnerFee()">查询在场费用</button>
             </div>
 
             <div style="display: flex; gap: 8px; align-items: center;">
@@ -399,7 +396,7 @@
             </div>
 
             <button type="button" class="btn-inner-pay" id="innerPayBtn" onclick="doInnerPay()">
-              <span>模拟场内扫码缴费 (不放行)</span>
+              <span>模拟场内预缴 (车不放行)</span>
             </button>
           </div>
         </div>
@@ -623,12 +620,12 @@
       }
     }
 
-    // 右侧：场内查费
+    // 右侧：手工车牌查费 (联动预缴与左侧看板)
     async function queryInnerFee() {
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
       const serverIp = document.getElementById("serverIp").value.trim();
       if (!carNo) {
-        alert("请输入场内待查车牌号！");
+        alert("请输入车牌号后再查询费用！");
         return;
       }
       try {
@@ -636,9 +633,34 @@
         const json = await resp.json();
         if (json.code === 200 && json.data) {
           document.getElementById("innerMoney").value = json.data.money.toFixed(2);
-          alert(`查询成功！[${carNo}] 在场停放 ${json.data.stay_minute} 分钟，系统当前应缴 ${json.data.money.toFixed(2)} 元`);
+          
+          // 如果左侧此时没有弹窗，自动将查费结果也同步到左侧看板
+          if (!currentPopupData) {
+            const badge = document.getElementById("plateBadge");
+            badge.className = "plate-badge";
+            badge.innerText = carNo;
+            document.getElementById("heroMoney").innerHTML = `${json.data.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
+            document.getElementById("heroStay").innerHTML = `${json.data.stay_minute} <span style="font-size:14px;">分钟</span>`;
+            document.getElementById("heroChannel").innerText = "后台算费";
+            document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
+            document.getElementById("heroTime").innerText = "刚同步";
+
+            const exitBtn = document.getElementById("exitPayBtn");
+            exitBtn.disabled = false;
+            exitBtn.innerHTML = `<span>立即代缴开闸放行 [${carNo}]</span>`;
+            
+            currentPopupData = {
+              car_no: carNo,
+              money: json.data.money,
+              dsn: "",
+              in_time: json.data.in_time,
+              stay_minute: json.data.stay_minute,
+              channel_name: "手工查费",
+              popup_time: new Date().toLocaleTimeString()
+            };
+          }
         } else {
-          alert(json.msg || "该车无需缴费或不在场内");
+          alert(json.msg || "未查到在场费用或车辆已出场");
         }
       } catch (err) {
         alert("查费失败: " + err.message);

@@ -359,20 +359,25 @@
         </div>
       </div>
 
-      <!-- 主操作按钮 -->
-      <button class="btn-pay-now" id="mainPayBtn" onclick="doSubmit()" disabled>
-        <span>立即代缴开闸放行</span>
-      </button>
+      <!-- 操作按钮组 (出口开闸 vs 场内预缴) -->
+      <div style="display: flex; gap: 10px; margin-top: 14px;">
+        <button class="btn-pay-now" id="mainPayBtn" style="flex: 2;" onclick="doSubmit('OUT_LOT')" disabled>
+          <span>立即代缴开闸放行</span>
+        </button>
+        <button type="button" class="btn-secondary" id="innerPayBtn" style="flex: 1; height: 44px; font-size: 13px; font-weight: 600; border-color: #cbd5e1;" onclick="doSubmit('IN_LOT')" disabled>
+          <span>仅场内预缴(不放行)</span>
+        </button>
+      </div>
 
       <div style="font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 10px;">
-        当通道识别有车出场时，此处自动填入车牌与真实算费金额，点一下即刻放行
+        自动同步岗亭弹窗与算费，点击左侧按钮立即放行出场，点击右侧仅做场内记账
       </div>
     </div>
 
     <!-- 【右栏】支付方式与业务参数配置 -->
     <div class="panel">
       <div class="panel-header">
-        <h2>支付通道与模式参数</h2>
+        <h2>支付通道与参数配置</h2>
         <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">H51810900057</strong></span>
       </div>
 
@@ -416,27 +421,17 @@
         </div>
       </div>
 
-      <!-- 2. 支付业务场景 -->
-      <div class="config-group">
-        <div class="config-label">
-          <span>业务场景模式</span>
-          <span style="font-size: 12px; color: var(--text-muted); font-weight: normal;" id="sceneDescHint">扫码即放行开闸</span>
-        </div>
-        <div class="radio-pill-group">
-          <div class="radio-pill active" id="pillOut" onclick="selectScene('OUT_LOT')">出口扫码开闸</div>
-          <div class="radio-pill" id="pillIn" onclick="selectScene('IN_LOT')">场内提前缴费 (车仍在场)</div>
-        </div>
-        <input type="hidden" id="sceneMode" value="OUT_LOT">
-        <input type="hidden" id="dsn" value="SIM21712648130131729">
-      </div>
-
-      <!-- 3. 手动覆盖 (备用) -->
-      <div class="config-group">
+      <!-- 2. 手动覆盖 (备用) -->
+      <div class="config-group" style="margin-top: 18px;">
         <div class="config-label">
           <span>手工车牌与查费 (可选)</span>
         </div>
         <div class="input-action-row">
-          <input type="text" id="manualCarNo" class="text-input" placeholder="留空则使用左侧弹窗车牌">
+          <input type="text" id="manualCarNo" class="text-input" placeholder="留空则自动使用左侧弹窗车牌">
+          <button type="button" class="btn-secondary" onclick="queryCarFee()">查询费用</button>
+        </div>
+      </div>
+    </div>
           <button type="button" class="btn-secondary" onclick="queryCarFee()">查询费用</button>
         </div>
       </div>
@@ -569,33 +564,6 @@
       }
     }
 
-    function selectScene(sceneVal) {
-      document.getElementById("sceneMode").value = sceneVal;
-      document.getElementById("pillOut").classList.toggle("active", sceneVal === "OUT_LOT");
-      document.getElementById("pillIn").classList.toggle("active", sceneVal === "IN_LOT");
-      const hint = document.getElementById("sceneDescHint");
-      const mainBtn = document.getElementById("mainPayBtn");
-      const autoOutCb = document.getElementById("autoOut");
-
-      if (sceneVal === "OUT_LOT") {
-        hint.innerText = "扫码即放行开闸";
-        autoOutCb.checked = true;
-        if (currentPopupData) {
-          mainBtn.innerHTML = `<span>立即为 [${currentPopupData.car_no}] 缴纳 ${currentPopupData.money.toFixed(2)} 元并开闸</span>`;
-        } else {
-          mainBtn.innerHTML = `<span>立即代缴开闸放行</span>`;
-        }
-      } else {
-        hint.innerText = "车辆在车位预付，不触发开闸";
-        autoOutCb.checked = false;
-        if (currentPopupData) {
-          mainBtn.innerHTML = `<span>立即缴纳场内预付费 [${currentPopupData.car_no}] (车不放行)</span>`;
-        } else {
-          mainBtn.innerHTML = `<span>立即缴纳场内预付费 (车不放行)</span>`;
-        }
-      }
-    }
-
     // 轮询当前岗亭弹窗
     async function pollPopup(manual) {
       try {
@@ -611,6 +579,7 @@
         const heroInTime = document.getElementById("heroInTime");
         const heroTime = document.getElementById("heroTime");
         const mainPayBtn = document.getElementById("mainPayBtn");
+        const innerPayBtn = document.getElementById("innerPayBtn");
 
         if (popup && popup.car_no) {
           currentPopupData = popup;
@@ -624,11 +593,8 @@
           heroTime.innerText = popup.popup_time.split(" ")[1] || popup.popup_time;
 
           mainPayBtn.disabled = false;
-          mainPayBtn.innerHTML = `<span>立即为 [${popup.car_no}] 缴纳 ${popup.money.toFixed(2)} 元并开闸</span>`;
-
-          if (popup.dsn) {
-            document.getElementById("dsn").value = popup.dsn;
-          }
+          mainPayBtn.innerHTML = `<span>立即代缴开闸放行 [${popup.car_no}]</span>`;
+          innerPayBtn.disabled = false;
         } else {
           currentPopupData = null;
           badge.className = "plate-badge empty";
@@ -641,7 +607,8 @@
 
           const manualCar = document.getElementById("manualCarNo").value.trim();
           mainPayBtn.disabled = !manualCar;
-          mainPayBtn.innerHTML = `<span>立即下发支付</span>`;
+          mainPayBtn.innerHTML = `<span>立即代缴开闸放行</span>`;
+          innerPayBtn.disabled = !manualCar;
         }
       } catch (e) {
         // ignore
@@ -663,7 +630,7 @@
           currentPopupData = {
             car_no: carNo,
             money: json.data.money,
-            dsn: document.getElementById("dsn").value.trim(),
+            dsn: "",
             in_time: json.data.in_time,
             stay_minute: json.data.stay_minute,
             channel_name: "系统算费",
@@ -679,9 +646,9 @@
           document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
           document.getElementById("heroTime").innerText = "刚同步";
 
-          const mainBtn = document.getElementById("mainPayBtn");
-          mainBtn.disabled = false;
-          mainBtn.innerHTML = `<span>立即为 [${carNo}] 缴纳 ${json.data.money.toFixed(2)} 元</span>`;
+          document.getElementById("mainPayBtn").disabled = false;
+          document.getElementById("mainPayBtn").innerHTML = `<span>立即代缴开闸放行 [${carNo}]</span>`;
+          document.getElementById("innerPayBtn").disabled = false;
         } else {
           alert(json.msg || "未查到在场费用");
         }
@@ -690,19 +657,18 @@
       }
     }
 
-    // 提交支付
-    async function doSubmit() {
-      const btn = document.getElementById("mainPayBtn");
+    // 提交支付: mode = 'OUT_LOT' (出口开闸) 或 'IN_LOT' (场内预缴)
+    async function doSubmit(mode) {
+      const isExit = (mode !== 'IN_LOT');
+      const btn = isExit ? document.getElementById("mainPayBtn") : document.getElementById("innerPayBtn");
       const serverIp = document.getElementById("serverIp").value.trim();
-      const parkNo = "H51810900057";
       
       const manualCar = document.getElementById("manualCarNo").value.trim().toUpperCase();
       const carNo = manualCar || (currentPopupData ? currentPopupData.car_no : "");
       const money = currentPopupData ? currentPopupData.money : 10.0;
       const payType = parseInt(document.getElementById("payType").value);
-      const scene = document.getElementById("sceneMode").value;
-      const dsn = scene === "OUT_LOT" ? document.getElementById("dsn").value.trim() : "";
-      const autoOut = document.getElementById("autoOut").checked;
+      const dsn = isExit ? (currentPopupData ? currentPopupData.dsn : "") : "";
+      const autoOut = isExit;
 
       if (!serverIp || !carNo) {
         alert("未检测到弹窗车辆，请手动输入车牌！");
@@ -710,10 +676,10 @@
       }
 
       localStorage.setItem("last_server_ip", serverIp);
-      localStorage.setItem("last_park_no", parkNo);
 
       btn.disabled = true;
-      btn.innerHTML = `<span>正在向车场下发支付与开闸...</span>`;
+      const oldHtml = btn.innerHTML;
+      btn.innerHTML = `<span>⏳ 正在处理中...</span>`;
 
       try {
         const resp = await fetch("/api/pay", {
@@ -721,7 +687,6 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             server_ip: serverIp,
-            park_no: parkNo,
             car_no: carNo,
             money: money,
             pay_type: payType,
@@ -729,6 +694,29 @@
             auto_out: autoOut
           })
         });
+
+        const data = await resp.json();
+        if (data.code === 200 && data.data) {
+          const d = data.data;
+          const panel = document.getElementById("receiptPanel");
+          panel.className = "receipt-panel show";
+          document.getElementById("receiptTimestamp").innerText = d.pay_time;
+          document.getElementById("rcptCar").innerText = d.car_no;
+          document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
+          document.getElementById("rcptOrder").innerText = d.order_num;
+          document.getElementById("rcptType").innerText = d.pay_type_name + (isExit ? " (出口开闸)" : " (场内预缴)");
+
+          setTimeout(() => pollPopup(true), 1500);
+        } else {
+          alert("下发失败: " + (data.msg || "未知错误"));
+        }
+      } catch (err) {
+        alert("调用服务异常: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
 
         const data = await resp.json();
         if (data.code === 200 && data.data) {

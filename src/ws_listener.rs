@@ -64,25 +64,46 @@ pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup)
     });
 }
 
-/// 主动探测车场配置 (从 MySQL 查出真实 PARK_NUM 和在线岗亭)
-pub fn probe_server_details(server_ip: &str) -> (String, String, String) {
+/// 主动探测车场配置 (从 MySQL 查出真实 PARK_NUM、在线岗亭及专属支付 MQTT 凭证)
+pub fn probe_server_details(server_ip: &str) -> (String, String, String, String, String, String) {
     use std::process::Command;
 
     let mut park_no = "H51810900057".to_string();
     let mut box_id = "1".to_string();
     let mut user = "超级管理员".to_string();
+    let mut mqtt_host = "121.37.253.10:1883".to_string();
+    let mut mqtt_user = "dr-emqx".to_string();
+    let mut mqtt_pwd = "qNnbPZZ6yj4Ynyx5NoIg".to_string();
 
-    // 1. 查 PARK_NUM
-    let sql_park = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"SELECT parameter_value FROM sys_parameters WHERE parameter_code='PARK_NUM';\" 2>/dev/null";
+    // 1. 查系统参数中的 PARK_NUM 和支付 MQTT Broker 配置
+    let sql_params = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"\
+        SELECT parameter_code, parameter_value FROM sys_parameters \
+        WHERE parameter_code IN ('PARK_NUM', 'MQTT_SETTING_PAY_URL_ONLINE', 'MQTT_SETTING_PAY_USERNAME', 'MQTT_SETTING_PAY_PASSWORD');\" 2>/dev/null";
+    
     if let Ok(out) = Command::new("sshpass")
-        .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), sql_park])
+        .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), sql_params])
         .output()
     {
         let txt = String::from_utf8_lossy(&out.stdout);
-        if let Some(val) = txt.lines().nth(1) {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                park_no = trimmed.to_string();
+        for line in txt.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 2 {
+                let code = parts[0].trim();
+                let val = parts[1].trim();
+                match code {
+                    "PARK_NUM" if !val.is_empty() => park_no = val.to_string(),
+                    "MQTT_SETTING_PAY_URL_ONLINE" if !val.is_empty() => {
+                        // 例如 "tcp://a.drzk.cn:62181,tcp://b.drzk.cn:62181" 或 "tcp://121.37.253.10:1883"
+                        let first_url = val.split(',').next().unwrap_or(val).trim();
+                        let clean_host = first_url.trim_start_matches("tcp://").trim_start_matches("ssl://").trim();
+                        if !clean_host.is_empty() {
+                            mqtt_host = clean_host.to_string();
+                        }
+                    }
+                    "MQTT_SETTING_PAY_USERNAME" if !val.is_empty() => mqtt_user = val.to_string(),
+                    "MQTT_SETTING_PAY_PASSWORD" if !val.is_empty() => mqtt_pwd = val.to_string(),
+                    _ => {}
+                }
             }
         }
     }
@@ -106,7 +127,7 @@ pub fn probe_server_details(server_ip: &str) -> (String, String, String) {
         }
     }
 
-    (park_no, box_id, user)
+    (park_no, box_id, user, mqtt_host, mqtt_user, mqtt_pwd)
 }
 
 fn connect_ws(addr: &str, path: &str) -> Result<TcpStream, String> {

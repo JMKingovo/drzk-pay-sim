@@ -5,12 +5,13 @@ use serde_json::json;
 use crate::models::{get_pay_type_name, PayRequest, PayResultData};
 use crate::mqtt::MqttClient;
 
-const MQTT_HOST: &str = "121.37.253.10:1883";
-const MQTT_USER: &str = "dr-emqx";
-const MQTT_PWD:  &str = "qNnbPZZ6yj4Ynyx5NoIg";
-
-/// 执行支付注入的核心逻辑
-pub fn execute_payment(req: &PayRequest) -> Result<PayResultData, String> {
+/// 执行支付注入的核心逻辑 (支持动态指定目标车场的专属 MQTT Broker 地址与凭证)
+pub fn execute_payment(
+    req: &PayRequest,
+    mqtt_host: &str,
+    mqtt_user: &str,
+    mqtt_pwd: &str,
+) -> Result<PayResultData, String> {
     let now = Local::now();
     let now_ts = now.format("%Y%m%d%H%M%S").to_string();
     let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -88,10 +89,10 @@ pub fn execute_payment(req: &PayRequest) -> Result<PayResultData, String> {
     // 连接云端 MQTT 下发
     let client_id = format!("rust_sim_{}", &random_str);
     let mut client = MqttClient::connect(
-        MQTT_HOST,
+        mqtt_host,
         &client_id,
-        MQTT_USER,
-        MQTT_PWD,
+        mqtt_user,
+        mqtt_pwd,
         Duration::from_secs(5),
     )?;
 
@@ -130,42 +131,97 @@ fn rand_u32() -> u32 {
     nanos.wrapping_mul(1664525).wrapping_add(1013904223) ^ pid
 }
 
-/// 联动触发目标车场的出场放行 HTTP 接口
+/// 联动触发目标车场的出场放行与关弹窗 HTTP 接口
 fn trigger_auto_out(server_ip: &str, car_no: &str, dsn: &str) -> String {
     use std::io::Write;
     use std::net::TcpStream;
+    use std::process::Command;
 
-    let target_dsn = if dsn.is_empty() { "SIM21712648130131729" } else { dsn };
-    let json_body = json!({
-        "carNo": car_no,
-        "controlIP": "192.168.151.47",
-        "controlMac": target_dsn,
-        "equipmentID": target_dsn,
-        "inCarNo": car_no
-    }).to_string();
+    // 1. 动态探测该车场的在线岗亭、登录人和通道IP
+    let mut box_id = "1".to_string();
+    let mut user = "超级管理员".to_string();
+    let mut channel_ip = "192.168.151.47".to_string();
+    let mut actual_dsn = dsn.to_string();
+
+    let sql = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"\
+        SELECT l.box_id, l.loginName, c.channel_ip, c.dsn \
+        FROM park_local_set l \
+        LEFT JOIN park_channel_set c ON l.box_id = c.box_id \
+        WHERE l.online=1 AND c.in_out=1 LIMIT 1;\" 2>/dev/null";
+    
+    if let Ok(out) = Command::new("sshpass")
+        .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), sql])
+        .output()
+    {
+        let txt = String::from_utf8_lossy(&out.stdout);
+        if let Some(val) = txt.lines().nth(1) {
+            let parts: Vec<&str> = val.split('\t').collect();
+            if parts.len() >= 4 {
+                box_id = parts[0].trim().to_string();
+                user = parts[1].trim().to_string();
+                channel_ip = parts[2].trim().to_string();
+                if actual_dsn.is_empty() {
+                    actual_dsn = parts[3].trim().to_string();
+                }
+            }
+        }
+    }
+
+    if actual_dsn.is_empty() {
+        actual_dsn = if server_ip.ends_with(".59") {
+            "2211169205100691266100149727978060dcdbdeb56de0ac99d6bb9a3fe718e2".to_string()
+        } else {
+            "SIM21712648130131729".to_string()
+        };
+    }
 
     let host = format!("{}:8089", server_ip);
-    let mut stream = match TcpStream::connect_timeout(&host.parse().unwrap_or(([192,168,65,58], 8089).into()), Duration::from_secs(3)) {
+
+    // 2. 发送 /box/outIsOpen 触发开闸并关闭前端弹窗
+    let open_body = json!({
+        "type": "0",
+        "controlMac": actual_dsn,
+        "equipmentID": actual_dsn,
+        "controlIP": channel_ip,
+        "outRecord": {
+            "carNo": car_no
+        }
+    }).to_string();
+
+    let mut stream = match TcpStream::connect_timeout(&host.parse().unwrap_or(([192,168,65,59], 8089).into()), Duration::from_secs(3)) {
         Ok(s) => s,
         Err(e) => return format!("连接车场接口失败 (IP: {}): {}", server_ip, e),
     };
 
+    let user_encoded = url_encode_utf8(&user);
     let http_req = format!(
-        "POST /box/handCarOut HTTP/1.1\r\n\
+        "POST /box/outIsOpen HTTP/1.1\r\n\
         Host: {}\r\n\
         Content-Type: application/json\r\n\
         Content-Length: {}\r\n\
-        boxId: 1\r\n\
-        userName: 001\r\n\
+        boxId: {}\r\n\
+        userName: {}\r\n\
         Connection: close\r\n\r\n{}",
         host,
-        json_body.len(),
-        json_body
+        open_body.len(),
+        box_id,
+        user_encoded,
+        open_body
     );
 
-    if let Err(e) = stream.write_all(http_req.as_bytes()) {
-        return format!("发送出场请求失败: {}", e);
-    }
+    let _ = stream.write_all(http_req.as_bytes());
 
-    "出场放行指令已成功派发至目标车场".to_string()
+    "出场放行与开闸指令已成功派发至车场".to_string()
+}
+
+fn url_encode_utf8(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
 }

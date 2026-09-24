@@ -78,6 +78,9 @@ pub struct ServerConfig {
     pub login_name: String,
     pub is_connected: bool,
     pub status_text: String,
+    pub mqtt_host: String,
+    pub mqtt_user: String,
+    pub mqtt_pwd: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

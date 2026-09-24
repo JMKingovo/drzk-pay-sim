@@ -41,7 +41,7 @@ fn main() {
             }
         }
 
-        let (park_no, box_id, user) = ws_listener::probe_server_details(&server_ip);
+        let (park_no, box_id, user, mqtt_host, mqtt_user, mqtt_pwd) = ws_listener::probe_server_details(&server_ip);
         let shared_config = Arc::new(Mutex::new(models::ServerConfig {
             server_ip: server_ip.clone(),
             park_no,
@@ -49,6 +49,9 @@ fn main() {
             login_name: user,
             is_connected: false,
             status_text: format!("正在连接 {}:8089...", server_ip),
+            mqtt_host,
+            mqtt_user,
+            mqtt_pwd,
         }));
 
         let shared_popup = Arc::new(Mutex::new(None));
@@ -134,6 +137,11 @@ fn main() {
         std::process::exit(1);
     }
 
+    let (probed_park_no, _, _, mqtt_host, mqtt_user, mqtt_pwd) = ws_listener::probe_server_details(&server_ip);
+    if park_no == "H51810900057" && !probed_park_no.is_empty() {
+        park_no = probed_park_no;
+    }
+
     let req = PayRequest {
         car_no,
         money,
@@ -146,15 +154,16 @@ fn main() {
     };
 
     println!("============================================================");
-    println!("  🚗 正在下发测试支付...");
+    println!("  正在下发测试支付...");
     println!("  车牌号码: {}", req.car_no);
     println!("  支付金额: {} 元", req.money);
     println!("  支付类型: {}", req.pay_type);
     println!("  车场编号: {}", req.park_no);
     println!("  目标 IP:  {}", req.server_ip);
+    println!("  MQTT:     {}", mqtt_host);
     println!("============================================================");
 
-    match execute_payment(&req) {
+    match execute_payment(&req, &mqtt_host, &mqtt_user, &mqtt_pwd) {
         Ok(res) => {
             println!("✅ 支付结果下发成功！");
             println!("  流水单号: {}", res.order_num);

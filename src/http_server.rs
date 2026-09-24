@@ -63,7 +63,7 @@ pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: 
             }
 
             println!("🔄 正在连接并探测目标车场 [{}]...", new_ip);
-            let (probed_park_no, box_id, user) = probe_server_details(new_ip);
+            let (probed_park_no, box_id, user, mqtt_host, mqtt_user, mqtt_pwd) = probe_server_details(new_ip);
             let park_no = switch_req.park_no.unwrap_or(probed_park_no);
 
             // 更新全局配置
@@ -75,6 +75,9 @@ pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: 
                 c.login_name = user.clone();
                 c.is_connected = true;
                 c.status_text = format!("已连接 {}:8089 (车场: {})", new_ip, park_no);
+                c.mqtt_host = mqtt_host;
+                c.mqtt_user = mqtt_user;
+                c.mqtt_pwd = mqtt_pwd;
                 c.clone()
             };
 
@@ -127,12 +130,17 @@ pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: 
                 }
             }
 
+            let (mqtt_host, mqtt_user, mqtt_pwd) = {
+                let c = shared_config.lock().unwrap();
+                (c.mqtt_host.clone(), c.mqtt_user.clone(), c.mqtt_pwd.clone())
+            };
+
             println!(
-                "[下发支付] 车牌: {}, 金额: {}元, 目标车场IP: {}, 车场编号: {}, 方式: {}",
-                pay_req.car_no, pay_req.money, pay_req.server_ip, pay_req.park_no, pay_req.pay_type
+                "[下发支付] 车牌: {}, 金额: {}元, 目标车场IP: {}, 车场编号: {}, 方式: {}, MQTT Broker: {}",
+                pay_req.car_no, pay_req.money, pay_req.server_ip, pay_req.park_no, pay_req.pay_type, mqtt_host
             );
 
-            match execute_payment(&pay_req) {
+            match execute_payment(&pay_req, &mqtt_host, &mqtt_user, &mqtt_pwd) {
                 Ok(result) => {
                     println!("  -> 注入成功！单号: {}", result.order_num);
                     let mut lock = shared_popup.lock().unwrap();

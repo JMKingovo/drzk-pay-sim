@@ -618,7 +618,7 @@
       }
     }
 
-    // 右侧：手工车牌查费 (联动预缴与左侧看板)
+    // 右侧：手工车牌查费 (仅更新右侧本身，绝不干扰左侧出口看板)
     async function queryInnerFee() {
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
       const serverIp = document.getElementById("serverIp").value.trim();
@@ -626,49 +626,29 @@
         alert("请输入车牌号后再查询费用！");
         return;
       }
+      const hint = document.getElementById("innerFeeHint");
+      hint.style.display = "block";
+      hint.style.color = "var(--text-muted)";
+      hint.innerText = "正在查询在场费用...";
+
       try {
         const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
         const json = await resp.json();
         if (json.code === 200 && json.data) {
           const moneyVal = json.data.money.toFixed(2);
           document.getElementById("innerMoney").value = moneyVal;
-          const hint = document.getElementById("innerFeeHint");
           hint.style.display = "block";
+          hint.style.color = "var(--success)";
           hint.innerText = `在场算费: ${moneyVal} 元 (停放 ${json.data.stay_minute} 分钟)`;
 
           const innerBtn = document.getElementById("innerPayBtn");
           innerBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
-          
-          // 如果左侧此时没有弹窗，自动将查费结果也同步到左侧看板
-          if (!currentPopupData) {
-            const badge = document.getElementById("plateBadge");
-            badge.className = "plate-badge";
-            badge.innerText = carNo;
-            document.getElementById("heroMoney").innerHTML = `${moneyVal} <span style="font-size:14px;">元</span>`;
-            document.getElementById("heroStay").innerHTML = `${json.data.stay_minute} <span style="font-size:14px;">分钟</span>`;
-            document.getElementById("heroChannel").innerText = "后台算费";
-            document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
-            document.getElementById("heroTime").innerText = "刚同步";
-
-            const exitBtn = document.getElementById("exitPayBtn");
-            exitBtn.disabled = false;
-            exitBtn.innerHTML = `<span>立即代缴开闸放行 [${carNo}]</span>`;
-            
-            currentPopupData = {
-              car_no: carNo,
-              money: json.data.money,
-              dsn: "",
-              in_time: json.data.in_time,
-              stay_minute: json.data.stay_minute,
-              channel_name: "手工查费",
-              popup_time: new Date().toLocaleTimeString()
-            };
-          }
         } else {
-          document.getElementById("innerFeeHint").style.display = "none";
+          hint.style.display = "none";
           alert(json.msg || "未查到在场费用或车辆已出场");
         }
       } catch (err) {
+        hint.style.display = "none";
         alert("查费失败: " + err.message);
       }
     }

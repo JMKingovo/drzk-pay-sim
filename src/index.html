@@ -390,10 +390,8 @@
               <button type="button" class="btn-secondary" onclick="queryInnerFee()">查询在场费用</button>
             </div>
 
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <span style="font-size: 13px; color: #475569; white-space: nowrap;">预缴金额:</span>
-              <input type="number" id="innerMoney" class="text-input" step="0.01" value="10.00" placeholder="金额(元)">
-            </div>
+            <div id="innerFeeHint" style="font-size: 12px; color: var(--success); font-weight: 500; display: none;"></div>
+            <input type="hidden" id="innerMoney" value="0.00">
 
             <button type="button" class="btn-inner-pay" id="innerPayBtn" onclick="doInnerPay()">
               <span>模拟场内预缴 (车不放行)</span>
@@ -632,14 +630,21 @@
         const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
         const json = await resp.json();
         if (json.code === 200 && json.data) {
-          document.getElementById("innerMoney").value = json.data.money.toFixed(2);
+          const moneyVal = json.data.money.toFixed(2);
+          document.getElementById("innerMoney").value = moneyVal;
+          const hint = document.getElementById("innerFeeHint");
+          hint.style.display = "block";
+          hint.innerText = `在场算费: ${moneyVal} 元 (停放 ${json.data.stay_minute} 分钟)`;
+
+          const innerBtn = document.getElementById("innerPayBtn");
+          innerBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
           
           // 如果左侧此时没有弹窗，自动将查费结果也同步到左侧看板
           if (!currentPopupData) {
             const badge = document.getElementById("plateBadge");
             badge.className = "plate-badge";
             badge.innerText = carNo;
-            document.getElementById("heroMoney").innerHTML = `${json.data.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
+            document.getElementById("heroMoney").innerHTML = `${moneyVal} <span style="font-size:14px;">元</span>`;
             document.getElementById("heroStay").innerHTML = `${json.data.stay_minute} <span style="font-size:14px;">分钟</span>`;
             document.getElementById("heroChannel").innerText = "后台算费";
             document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
@@ -660,6 +665,7 @@
             };
           }
         } else {
+          document.getElementById("innerFeeHint").style.display = "none";
           alert(json.msg || "未查到在场费用或车辆已出场");
         }
       } catch (err) {
@@ -667,10 +673,9 @@
       }
     }
 
-    // 右侧：场内预缴
+    // 右侧：场内预缴 (金额完全来自系统后台算费)
     async function doInnerPay() {
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
-      const money = parseFloat(document.getElementById("innerMoney").value) || 0.0;
       const serverIp = document.getElementById("serverIp").value.trim();
       const payType = parseInt(document.getElementById("payType").value);
 
@@ -679,8 +684,28 @@
         return;
       }
 
+      let money = parseFloat(document.getElementById("innerMoney").value) || 0.0;
+      // 如果尚未查费，点击时自动查出真实在场费用
+      if (money <= 0) {
+        try {
+          const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
+          const json = await resp.json();
+          if (json.code === 200 && json.data) {
+            money = json.data.money;
+            document.getElementById("innerMoney").value = money.toFixed(2);
+          } else {
+            alert(json.msg || "未查到该车辆的在场费用");
+            return;
+          }
+        } catch (e) {
+          alert("查费请求失败: " + e.message);
+          return;
+        }
+      }
+
       const btn = document.getElementById("innerPayBtn");
       btn.disabled = true;
+      const oldHtml = btn.innerHTML;
       btn.innerText = "正在下发预缴...";
 
       try {
@@ -709,7 +734,7 @@
         alert("请求异常: " + err.message);
       } finally {
         btn.disabled = false;
-        btn.innerText = "模拟场内扫码缴费 (不放行)";
+        btn.innerHTML = oldHtml;
       }
     }
 

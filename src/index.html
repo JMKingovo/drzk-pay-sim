@@ -60,7 +60,7 @@
       padding: 0 8px;
       font-size: 13px;
       font-weight: 600;
-      width: 140px;
+      width: 170px;
       color: #1e293b;
       outline: none;
     }
@@ -313,17 +313,11 @@
 
   <!-- 顶部状态栏与目标车场切换 -->
   <div class="top-nav">
-    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; width: 100%;">
       <div class="nav-ip-switch">
         <span>目标车场 IP:</span>
-        <input type="text" id="serverIp" class="nav-ip-input" value="192.168.65.58">
-        <button type="button" class="btn-secondary" style="height: 28px; padding: 0 12px; font-size: 12px; background: var(--primary); color: #fff; border: none;" onclick="switchServer()">连接车场</button>
-      </div>
-
-      <div class="quick-chips" style="margin-top: 0;">
-        <span class="chip" onclick="quickSetIp('192.168.65.58')">192.168.65.58(民乐)</span>
-        <span class="chip" onclick="quickSetIp('192.168.65.59')">192.168.65.59(L板)</span>
-        <span class="chip" onclick="quickSetIp('127.0.0.1')">127.0.0.1</span>
+        <input type="text" id="serverIp" class="nav-ip-input" value="192.168.65.59" placeholder="例如: 192.168.65.59" onkeydown="if(event.key==='Enter') switchServer()">
+        <button type="button" class="btn-secondary" style="height: 28px; padding: 0 12px; font-size: 12px; background: var(--primary); color: #fff; border: none; font-weight: 600;" onclick="switchServer()">连接车场</button>
       </div>
 
       <div class="status-badge" style="margin-left: auto;">
@@ -500,11 +494,6 @@
       }, 1500);
       pollPopup(true);
     };
-
-    function quickSetIp(ip) {
-      document.getElementById("serverIp").value = ip;
-      switchServer();
-    }
 
     async function switchServer() {
       const serverIp = document.getElementById("serverIp").value.trim();

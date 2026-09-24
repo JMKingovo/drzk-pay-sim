@@ -275,20 +275,34 @@ fn handle_query_fee(request: tiny_http::Request, url_str: &str, shared_config: &
 fn sniff_latest_popup(server_ip: &str) -> Option<DetectedPopup> {
     use std::process::Command;
 
-    let cmd = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"\
-        SELECT carNo FROM carno_history_charge ORDER BY id DESC LIMIT 1;\" 2>/dev/null";
+    // 1. 从目标车场的当前活跃日志中抓取当前正在通道停泊待收费的车辆与通道 DSN
+    let cmd = "grep '当前车辆：' /wasHome/server/logs/web-box.log | tail -n 1 2>/dev/null";
     
     let output = Command::new("sshpass")
         .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), cmd])
         .output()
         .ok()?;
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    let car_no = text.lines().nth(1)?.trim();
+    let line = String::from_utf8_lossy(&output.stdout);
+    if !line.contains("当前车辆：") {
+        return None;
+    }
+
+    // 解析格式: ... 通道<dsn>当前车辆：<car_no>
+    let pos_car = line.find("当前车辆：")?;
+    let car_no = line[pos_car + "当前车辆：".len()..].trim();
     if car_no.is_empty() {
         return None;
     }
 
+    let dsn = if let Some(pos_chan) = line.find("通道") {
+        let after_chan = &line[pos_chan + "通道".len()..pos_car];
+        after_chan.trim().to_string()
+    } else {
+        String::new()
+    };
+
+    // 2. 调用目标车场的 /box/fee/current 接口查询当前车辆精确计费
     let fee_url = format!("http://{}:8089/box/fee/current?carNo={}", server_ip, percent_encode(car_no));
     let json_val = fetch_http_json(&fee_url).ok()?;
     let status = json_val.get("status").and_then(|s| s.as_i64()).unwrap_or(0);
@@ -297,16 +311,22 @@ fn sniff_latest_popup(server_ip: &str) -> Option<DetectedPopup> {
     }
 
     let data = json_val.get("data")?;
-    let pay_charge_cents = data.get("payCharge").and_then(|c| c.as_f64()).unwrap_or(0.0);
-    let money = pay_charge_cents / 100.0;
+    let raw_fee = data.get("payCharge").and_then(|c| c.as_f64()).unwrap_or(0.0);
+    // 判断单位：如果在 1~99 范围且整除通常直接是元，如果是几千等则是分
+    let money = if raw_fee >= 100.0 && raw_fee.fract() == 0.0 {
+        raw_fee / 100.0
+    } else {
+        raw_fee
+    };
+
     let in_time = data.get("inTime").and_then(|t| t.as_str()).unwrap_or("").to_string();
 
     Some(DetectedPopup {
         car_no: car_no.to_string(),
         money,
-        dsn: "SIM21712648130131729".to_string(),
+        dsn: if dsn.is_empty() { "2211169205100691266100149727978060dcdbdeb56de0ac99d6bb9a3fe718e2".to_string() } else { dsn },
         in_time,
-        channel_name: "出口通道".to_string(),
+        channel_name: "出口".to_string(),
         popup_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         method: "parkOutIsOpen".to_string(),
     })

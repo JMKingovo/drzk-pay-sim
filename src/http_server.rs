@@ -312,12 +312,8 @@ fn sniff_latest_popup(server_ip: &str) -> Option<DetectedPopup> {
 
     let data = json_val.get("data")?;
     let raw_fee = data.get("payCharge").and_then(|c| c.as_f64()).unwrap_or(0.0);
-    // 判断单位：如果在 1~99 范围且整除通常直接是元，如果是几千等则是分
-    let money = if raw_fee >= 100.0 && raw_fee.fract() == 0.0 {
-        raw_fee / 100.0
-    } else {
-        raw_fee
-    };
+    // 系统底层 payCharge 单位严格为【分】，统一除以 100.0 转换为【元】
+    let money = raw_fee / 100.0;
 
     let in_time = data.get("inTime").and_then(|t| t.as_str()).unwrap_or("").to_string();
 

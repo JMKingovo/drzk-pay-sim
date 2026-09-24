@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>支付测试台</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #059669;
+      --success-hover: #047857;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --text-sub: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+    body { background-color: var(--bg); color: var(--text); min-height: 100vh; padding: 20px 24px; -webkit-font-smoothing: antialiased; }
+
+    /* 顶部导航与状态条 */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 18px;
+      margin-bottom: 18px;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .nav-brand h1 {
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.2px;
+    }
+    .nav-ip-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #f1f5f9;
+      padding: 4px 6px 4px 10px;
+      border-radius: 6px;
+    }
+    .nav-ip-switch span { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+    .nav-ip-input {
+      border: 1px solid transparent;
+      background: #fff;
+      height: 28px;
+      border-radius: 4px;
+      padding: 0 8px;
+      font-size: 13px;
+      font-weight: 600;
+      width: 140px;
+      color: #1e293b;
+      outline: none;
+    }
+    .nav-ip-input:focus { border-color: var(--primary); }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      padding: 5px 10px;
+      border-radius: 16px;
+    }
+    .indicator-dot {
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+    }
+
+    /* 左右两栏网格 */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+    @media (max-width: 992px) {
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    /* 面板卡片 */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .panel-header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+    }
+
+    /* 左栏：待缴看板 */
+    .detected-hero {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .plate-badge {
+      display: inline-block;
+      background: #1d4ed8;
+      color: #fff;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      padding: 6px 18px;
+      border-radius: 6px;
+      border: 1px solid #1e40af;
+      margin-bottom: 14px;
+    }
+    .plate-badge.empty {
+      background: #e2e8f0;
+      border-color: #cbd5e1;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: #64748b;
+    }
+
+    .metrics-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .metric-card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      text-align: left;
+    }
+    .metric-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+    .metric-val { font-size: 22px; font-weight: 700; color: #0f172a; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .metric-val.money { color: var(--success); }
+
+    .detected-meta-list {
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-around;
+    }
+
+    .btn-pay-now {
+      width: 100%;
+      height: 44px;
+      background: var(--success);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease;
+    }
+    .btn-pay-now:hover { background: var(--success-hover); }
+    .btn-pay-now:disabled { background: #cbd5e1; cursor: not-allowed; }
+
+    /* 右栏：参数配置 */
+    .config-group { margin-bottom: 14px; }
+    .config-label { font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+
+    .pay-type-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .pay-type-card {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      color: #334155;
+      background: #fff;
+      transition: all 0.15s;
+    }
+    .pay-type-card:hover { border-color: var(--primary); background: #f8fafc; }
+    .pay-type-card.active { border-color: var(--primary); background: #eff6ff; color: var(--primary); font-weight: 600; }
+
+    .text-input {
+      width: 100%;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 13px;
+      color: #1e293b;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .text-input:focus { border-color: var(--primary); }
+
+    .input-action-row { display: flex; gap: 8px; }
+    .input-action-row input { flex: 1; }
+    .btn-secondary {
+      height: 36px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      border-radius: 6px;
+      color: #475569;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .btn-secondary:hover { background: #e2e8f0; color: #0f172a; }
+
+    .radio-pill-group {
+      display: flex;
+      gap: 6px;
+      background: #f1f5f9;
+      padding: 3px;
+      border-radius: 6px;
+    }
+    .radio-pill {
+      flex: 1;
+      text-align: center;
+      padding: 6px 0;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+    .radio-pill.active { background: #fff; color: #0f172a; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #475569;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    .checkbox-row input { width: 15px; height: 15px; cursor: pointer; }
+
+    /* 下方回执面板 */
+    .receipt-panel {
+      margin-top: 18px;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      display: none;
+    }
+    .receipt-panel.show { display: block; }
+    .receipt-header {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--success);
+      display: flex;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .receipt-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      font-size: 12px;
+      background: #f8fafc;
+      padding: 12px;
+      border-radius: 6px;
+    }
+    .receipt-item span { color: var(--text-muted); display: block; margin-bottom: 2px; }
+    .receipt-item strong { color: #1e293b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .footer { text-align: center; font-size: 12px; color: var(--text-sub); margin-top: 24px; }
+  </style>
+</head>
+<body>
+
+  <!-- 顶部状态栏与目标车场切换 -->
+  <div class="top-nav">
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+      <div class="nav-ip-switch">
+        <span>目标车场 IP:</span>
+        <input type="text" id="serverIp" class="nav-ip-input" value="192.168.65.58">
+        <button type="button" class="btn-secondary" style="height: 28px; padding: 0 12px; font-size: 12px; background: var(--primary); color: #fff; border: none;" onclick="switchServer()">连接车场</button>
+      </div>
+
+      <div class="quick-chips" style="margin-top: 0;">
+        <span class="chip" onclick="quickSetIp('192.168.65.58')">192.168.65.58(民乐)</span>
+        <span class="chip" onclick="quickSetIp('192.168.65.59')">192.168.65.59(L板)</span>
+        <span class="chip" onclick="quickSetIp('127.0.0.1')">127.0.0.1</span>
+      </div>
+
+      <div class="status-badge" style="margin-left: auto;">
+        <div class="indicator-dot" id="wsIndicator"></div>
+        <span id="navWsStatus">正在连接...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 左右对称布局 -->
+  <div class="dashboard-grid">
+
+    <!-- 【左栏】当前出场车辆与收费弹窗看板 -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>当前岗亭待收费弹窗 (自动同步)</h2>
+        <button type="button" class="btn-secondary" style="height: 28px; padding: 0 10px; font-size: 12px;" onclick="pollPopup(true)">刷新感知</button>
+      </div>
+
+      <!-- 看板大卡片 -->
+      <div class="detected-hero" id="heroCard">
+        <div id="plateBadge" class="plate-badge empty">正在监听道闸出车...</div>
+        
+        <div class="metrics-row">
+          <div class="metric-card">
+            <div class="metric-label">应收缴费金额</div>
+            <div class="metric-val money" id="heroMoney">-- <span style="font-size: 14px;">元</span></div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">停车时长</div>
+            <div class="metric-val" id="heroStay">-- <span style="font-size: 14px;">分钟</span></div>
+          </div>
+        </div>
+
+        <div class="detected-meta-list" id="heroMeta">
+          <div>通道: <strong id="heroChannel">--</strong></div>
+          <div>入场: <strong id="heroInTime">--</strong></div>
+          <div>捕获: <strong id="heroTime">--</strong></div>
+        </div>
+      </div>
+
+      <!-- 主操作按钮 -->
+      <button class="btn-pay-now" id="mainPayBtn" onclick="doSubmit()" disabled>
+        <span>立即代缴开闸放行</span>
+      </button>
+
+      <div style="font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 10px;">
+        当通道识别有车出场时，此处自动填入车牌与真实算费金额，点一下即刻放行
+      </div>
+    </div>
+
+    <!-- 【右栏】支付方式与业务参数配置 -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>支付通道与模式参数</h2>
+        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">H51810900057</strong></span>
+      </div>
+
+      <!-- 1. 支付方式全量选择 -->
+      <div class="config-group">
+        <div class="config-label">
+          <span>选择支付渠道 (payType)</span>
+          <span style="font-size: 12px; color: var(--primary); font-weight: normal;" id="currentPayTypeName">聚合支付V6 (随行付SXF)</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <select id="payTypeSelect" class="text-input" style="flex: 2;" onchange="onPayTypeSelectChange(this)">
+            <option value="57" selected>57 - 聚合支付V6 (随行付SXF)</option>
+            <option value="1">1 - 微信直连扫码</option>
+            <option value="2">2 - 支付宝直连扫码</option>
+            <option value="0">0 - 现金支付</option>
+            <option value="3">3 - 银联闪付</option>
+            <option value="21">21 - ETC支付</option>
+            <option value="101">101 - 微信无感支付</option>
+            <option value="102">102 - 支付宝无感支付</option>
+            <option value="9">9 - 银联无感支付</option>
+            <option value="8">8 - 银联App扫码付</option>
+            <option value="14">14 - 银联</option>
+            <option value="16">16 - 工商银行</option>
+            <option value="15">15 - 聚合支付V1</option>
+            <option value="40">40 - 聚合支付V2</option>
+            <option value="34">34 - 聚合支付V3</option>
+            <option value="54">54 - 聚合支付V5</option>
+            <option value="19">19 - 聚合C支付</option>
+            <option value="23">23 - 工行聚合付</option>
+            <option value="25">25 - 银联商务</option>
+            <option value="28">28 - E捷通</option>
+            <option value="36">36 - 通联支付</option>
+            <option value="52">52 - 好运通</option>
+            <option value="56">56 - 星富通</option>
+            <option value="60">60 - 通付无感</option>
+            <option value="99">99 - 线下支付</option>
+            <option value="6">6 - 其他支付</option>
+            <option value="custom">-- 自定义输入编码 --</option>
+          </select>
+          <input type="number" id="payType" class="text-input" style="flex: 1; min-width: 90px;" value="57" placeholder="编码" onchange="onPayTypeCustomInput(this.value)">
+        </div>
+      </div>
+
+      <!-- 2. 支付业务场景 -->
+      <div class="config-group">
+        <div class="config-label">业务场景模式</div>
+        <div class="radio-pill-group">
+          <div class="radio-pill active" id="pillOut" onclick="selectScene('OUT_LOT')">出口扫码开闸 (带通道DSN)</div>
+          <div class="radio-pill" id="pillIn" onclick="selectScene('IN_LOT')">场内提前扫码 (车辆在场)</div>
+        </div>
+        <input type="hidden" id="sceneMode" value="OUT_LOT">
+      </div>
+
+      <!-- 3. 出口 DSN 与通道 -->
+      <div class="config-group" id="dsnContainer">
+        <div class="config-label">出口通道 DSN</div>
+        <input type="text" id="dsn" class="text-input" value="SIM21712648130131729">
+      </div>
+
+      <!-- 4. 手动覆盖 (备用) -->
+      <div class="config-group">
+        <div class="config-label">
+          <span>手工车牌与查费 (可选)</span>
+        </div>
+        <div class="input-action-row">
+          <input type="text" id="manualCarNo" class="text-input" placeholder="留空则使用左侧弹窗车牌">
+          <button type="button" class="btn-secondary" onclick="queryCarFee()">查询费用</button>
+        </div>
+      </div>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="autoOut" checked>
+        <span>若未自动开闸，支付后联动调用车场出场放行接口</span>
+      </label>
+    </div>
+
+  </div>
+
+  <!-- 下方支付回执卡片 -->
+  <div class="receipt-panel" id="receiptPanel">
+    <div class="receipt-header">
+      <span>支付注入成功，车场已接收并处理</span>
+      <span style="margin-left: auto; color: var(--text-muted); font-weight: normal;" id="receiptTimestamp"></span>
+    </div>
+    <div class="receipt-grid">
+      <div class="receipt-item">
+        <span>车牌号码</span>
+        <strong id="rcptCar">--</strong>
+      </div>
+      <div class="receipt-item">
+        <span>实收金额</span>
+        <strong id="rcptMoney" style="color: var(--success);">--</strong>
+      </div>
+      <div class="receipt-item">
+        <span>交易流水号</span>
+        <strong id="rcptOrder">--</strong>
+      </div>
+      <div class="receipt-item">
+        <span>支付方式</span>
+        <strong id="rcptType">--</strong>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentPopupData = null;
+
+    window.onload = function() {
+      const savedIp = localStorage.getItem("last_server_ip");
+      if (savedIp) {
+        document.getElementById("serverIp").value = savedIp;
+      }
+
+      fetchServerConfig();
+      // 定期同步状态与弹窗
+      setInterval(() => {
+        pollPopup(false);
+        fetchServerConfig();
+      }, 1500);
+      pollPopup(true);
+    };
+
+    function quickSetIp(ip) {
+      document.getElementById("serverIp").value = ip;
+      switchServer();
+    }
+
+    async function switchServer() {
+      const serverIp = document.getElementById("serverIp").value.trim();
+      if (!serverIp) return;
+
+      const navStatus = document.getElementById("navWsStatus");
+      const dot = document.getElementById("wsIndicator");
+      navStatus.innerText = "正在连接 " + serverIp + "...";
+      dot.style.background = "#f59e0b";
+
+      try {
+        const resp = await fetch("/api/server/switch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server_ip: serverIp })
+        });
+        const res = await resp.json();
+        if (res.code === 200 && res.data) {
+          localStorage.setItem("last_server_ip", serverIp);
+          document.getElementById("displayParkNo").innerText = res.data.park_no;
+          navStatus.innerText = res.data.status_text || ("已连接 " + serverIp);
+          dot.style.background = res.data.is_connected ? "#10b981" : "#f59e0b";
+          pollPopup(true);
+        } else {
+          navStatus.innerText = "切换失败: " + (res.msg || "");
+          dot.style.background = "#ef4444";
+        }
+      } catch (e) {
+        navStatus.innerText = "连接请求异常: " + e.message;
+        dot.style.background = "#ef4444";
+      }
+    }
+
+    async function fetchServerConfig() {
+      try {
+        const resp = await fetch("/api/server/config");
+        const res = await resp.json();
+        if (res.code === 200 && res.data) {
+          const cfg = res.data;
+          document.getElementById("displayParkNo").innerText = cfg.park_no;
+          document.getElementById("navWsStatus").innerText = cfg.status_text;
+          const dot = document.getElementById("wsIndicator");
+          dot.style.background = cfg.is_connected ? "#10b981" : "#ef4444";
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    function onPayTypeSelectChange(sel) {
+      if (sel.value !== "custom") {
+        document.getElementById("payType").value = sel.value;
+        const text = sel.options[sel.selectedIndex].text;
+        document.getElementById("currentPayTypeName").innerText = text;
+      } else {
+        document.getElementById("currentPayTypeName").innerText = "自定义编码模式";
+        document.getElementById("payType").focus();
+      }
+    }
+
+    function onPayTypeCustomInput(val) {
+      const sel = document.getElementById("payTypeSelect");
+      let found = false;
+      for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === val) {
+          sel.selectedIndex = i;
+          document.getElementById("currentPayTypeName").innerText = sel.options[i].text;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        sel.value = "custom";
+        document.getElementById("currentPayTypeName").innerText = "自定义类型编码 (" + val + ")";
+      }
+    }
+
+    function selectScene(sceneVal) {
+      document.getElementById("sceneMode").value = sceneVal;
+      document.getElementById("pillOut").classList.toggle("active", sceneVal === "OUT_LOT");
+      document.getElementById("pillIn").classList.toggle("active", sceneVal === "IN_LOT");
+      document.getElementById("dsnContainer").style.display = sceneVal === "OUT_LOT" ? "block" : "none";
+    }
+
+    // 轮询当前岗亭弹窗
+    async function pollPopup(manual) {
+      try {
+        const serverIp = document.getElementById("serverIp").value.trim() || "192.168.65.58";
+        const resp = await fetch("/api/popup/current?server_ip=" + encodeURIComponent(serverIp));
+        const json = await resp.json();
+        const popup = json.data;
+
+        const badge = document.getElementById("plateBadge");
+        const heroMoney = document.getElementById("heroMoney");
+        const heroStay = document.getElementById("heroStay");
+        const heroChannel = document.getElementById("heroChannel");
+        const heroInTime = document.getElementById("heroInTime");
+        const heroTime = document.getElementById("heroTime");
+        const mainPayBtn = document.getElementById("mainPayBtn");
+
+        if (popup && popup.car_no) {
+          currentPopupData = popup;
+          badge.className = "plate-badge";
+          badge.innerText = popup.car_no;
+
+          heroMoney.innerHTML = `${popup.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
+          heroStay.innerHTML = `${popup.stay_minute || 30} <span style="font-size:14px;">分钟</span>`;
+          heroChannel.innerText = popup.channel_name || "02出口";
+          heroInTime.innerText = popup.in_time ? popup.in_time.split(" ")[1] : "未知";
+          heroTime.innerText = popup.popup_time.split(" ")[1] || popup.popup_time;
+
+          mainPayBtn.disabled = false;
+          mainPayBtn.innerHTML = `<span>立即为 [${popup.car_no}] 缴纳 ${popup.money.toFixed(2)} 元并开闸</span>`;
+
+          if (popup.dsn) {
+            document.getElementById("dsn").value = popup.dsn;
+          }
+        } else {
+          currentPopupData = null;
+          badge.className = "plate-badge empty";
+          badge.innerText = "正在监听道闸出车...";
+          heroMoney.innerHTML = `-- <span style="font-size:14px;">元</span>`;
+          heroStay.innerHTML = `-- <span style="font-size:14px;">分钟</span>`;
+          heroChannel.innerText = "--";
+          heroInTime.innerText = "--";
+          heroTime.innerText = "--";
+
+          const manualCar = document.getElementById("manualCarNo").value.trim();
+          mainPayBtn.disabled = !manualCar;
+          mainPayBtn.innerHTML = `<span>立即下发支付</span>`;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 主动车牌算费
+    async function queryCarFee() {
+      const carNo = document.getElementById("manualCarNo").value.trim().toUpperCase();
+      const serverIp = document.getElementById("serverIp").value.trim();
+      if (!carNo) {
+        alert("请输入待查费的车牌号码！");
+        return;
+      }
+      try {
+        const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
+        const json = await resp.json();
+        if (json.code === 200 && json.data) {
+          currentPopupData = {
+            car_no: carNo,
+            money: json.data.money,
+            dsn: document.getElementById("dsn").value.trim(),
+            in_time: json.data.in_time,
+            stay_minute: json.data.stay_minute,
+            channel_name: "系统算费",
+            popup_time: new Date().toLocaleTimeString()
+          };
+
+          const badge = document.getElementById("plateBadge");
+          badge.className = "plate-badge";
+          badge.innerText = carNo;
+          document.getElementById("heroMoney").innerHTML = `${json.data.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
+          document.getElementById("heroStay").innerHTML = `${json.data.stay_minute} <span style="font-size:14px;">分钟</span>`;
+          document.getElementById("heroChannel").innerText = "后台算费";
+          document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
+          document.getElementById("heroTime").innerText = "刚同步";
+
+          const mainBtn = document.getElementById("mainPayBtn");
+          mainBtn.disabled = false;
+          mainBtn.innerHTML = `<span>立即为 [${carNo}] 缴纳 ${json.data.money.toFixed(2)} 元</span>`;
+        } else {
+          alert(json.msg || "未查到在场费用");
+        }
+      } catch (err) {
+        alert("查费失败: " + err.message);
+      }
+    }
+
+    // 提交支付
+    async function doSubmit() {
+      const btn = document.getElementById("mainPayBtn");
+      const serverIp = document.getElementById("serverIp").value.trim();
+      const parkNo = "H51810900057";
+      
+      const manualCar = document.getElementById("manualCarNo").value.trim().toUpperCase();
+      const carNo = manualCar || (currentPopupData ? currentPopupData.car_no : "");
+      const money = currentPopupData ? currentPopupData.money : 10.0;
+      const payType = parseInt(document.getElementById("payType").value);
+      const scene = document.getElementById("sceneMode").value;
+      const dsn = scene === "OUT_LOT" ? document.getElementById("dsn").value.trim() : "";
+      const autoOut = document.getElementById("autoOut").checked;
+
+      if (!serverIp || !carNo) {
+        alert("未检测到弹窗车辆，请手动输入车牌！");
+        return;
+      }
+
+      localStorage.setItem("last_server_ip", serverIp);
+      localStorage.setItem("last_park_no", parkNo);
+
+      btn.disabled = true;
+      btn.innerHTML = `<span>正在向车场下发支付与开闸...</span>`;
+
+      try {
+        const resp = await fetch("/api/pay", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            server_ip: serverIp,
+            park_no: parkNo,
+            car_no: carNo,
+            money: money,
+            pay_type: payType,
+            dsn: dsn,
+            auto_out: autoOut
+          })
+        });
+
+        const data = await resp.json();
+        if (data.code === 200 && data.data) {
+          const d = data.data;
+          const panel = document.getElementById("receiptPanel");
+          panel.className = "receipt-panel show";
+          document.getElementById("receiptTimestamp").innerText = d.pay_time;
+          document.getElementById("rcptCar").innerText = d.car_no;
+          document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
+          document.getElementById("rcptOrder").innerText = d.order_num;
+          document.getElementById("rcptType").innerText = d.pay_type_name;
+
+          setTimeout(() => pollPopup(true), 1500);
+        } else {
+          alert("下发失败: " + (data.msg || "未知错误"));
+        }
+      } catch (err) {
+        alert("调用服务异常: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>立即代缴开闸放行</span>`;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+[package]
+name = "drzk-pay-sim"
+version = "0.1.0"
+edition = "2021"
+authors = ["liujiaman"]
+description = "道尔云 5.0 智慧停车 - 电子支付模拟与下发工具 (支持多车场IP、CLI与HTTP API模式)"
+
+[dependencies]
+tiny_http = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

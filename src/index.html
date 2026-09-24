@@ -21,7 +21,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
     body { background-color: var(--bg); color: var(--text); min-height: 100vh; padding: 20px 24px; -webkit-font-smoothing: antialiased; }
 
-    /* 顶部导航与状态条 */
+    /* 顶部导航与目标车场切换 */
     .top-nav {
       display: flex;
       justify-content: space-between;
@@ -31,17 +31,6 @@
       border-radius: 10px;
       padding: 12px 18px;
       margin-bottom: 18px;
-    }
-    .nav-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .nav-brand h1 {
-      font-size: 16px;
-      font-weight: 700;
-      color: #0f172a;
-      letter-spacing: -0.2px;
     }
     .nav-ip-switch {
       display: flex;
@@ -117,12 +106,12 @@
       color: #334155;
     }
 
-    /* 左栏：待缴看板 */
+    /* 左栏：出口出车收费看板 */
     .detected-hero {
       background: #f8fafc;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 20px;
+      padding: 22px;
       text-align: center;
       margin-bottom: 16px;
     }
@@ -176,7 +165,7 @@
 
     .btn-pay-now {
       width: 100%;
-      height: 44px;
+      height: 46px;
       background: var(--success);
       color: #fff;
       font-size: 15px;
@@ -192,28 +181,9 @@
     .btn-pay-now:hover { background: var(--success-hover); }
     .btn-pay-now:disabled { background: #cbd5e1; cursor: not-allowed; }
 
-    /* 右栏：参数配置 */
-    .config-group { margin-bottom: 14px; }
+    /* 右栏：表单与工具 */
+    .config-group { margin-bottom: 16px; }
     .config-label { font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
-
-    .pay-type-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-    .pay-type-card {
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px 12px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 500;
-      color: #334155;
-      background: #fff;
-      transition: all 0.15s;
-    }
-    .pay-type-card:hover { border-color: var(--primary); background: #f8fafc; }
-    .pay-type-card.active { border-color: var(--primary); background: #eff6ff; color: var(--primary); font-weight: 600; }
 
     .text-input {
       width: 100%;
@@ -245,36 +215,28 @@
     }
     .btn-secondary:hover { background: #e2e8f0; color: #0f172a; }
 
-    .radio-pill-group {
-      display: flex;
-      gap: 6px;
-      background: #f1f5f9;
-      padding: 3px;
-      border-radius: 6px;
-    }
-    .radio-pill {
-      flex: 1;
-      text-align: center;
-      padding: 6px 0;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-muted);
-      cursor: pointer;
-      border-radius: 4px;
-      transition: all 0.15s;
-    }
-    .radio-pill.active { background: #fff; color: #0f172a; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-
-    .checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: #475569;
-      cursor: pointer;
+    .inner-tool-box {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
       margin-top: 6px;
     }
-    .checkbox-row input { width: 15px; height: 15px; cursor: pointer; }
+    .btn-inner-pay {
+      width: 100%;
+      height: 38px;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: background 0.15s;
+    }
+    .btn-inner-pay:hover { background: #2563eb; }
+    .btn-inner-pay:disabled { background: #cbd5e1; cursor: not-allowed; }
 
     /* 下方回执面板 */
     .receipt-panel {
@@ -305,8 +267,6 @@
     }
     .receipt-item span { color: var(--text-muted); display: block; margin-bottom: 2px; }
     .receipt-item strong { color: #1e293b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-
-    .footer { text-align: center; font-size: 12px; color: var(--text-sub); margin-top: 24px; }
   </style>
 </head>
 <body>
@@ -327,19 +287,19 @@
     </div>
   </div>
 
-  <!-- 左右对称布局 -->
+  <!-- 左右两栏布局 -->
   <div class="dashboard-grid">
 
-    <!-- 【左栏】当前出场车辆与收费弹窗看板 -->
+    <!-- ==================== 【左栏】出口出车收费弹窗 (纯出口开闸放行) ==================== -->
     <div class="panel">
       <div class="panel-header">
-        <h2>当前岗亭待收费弹窗 (自动同步)</h2>
+        <h2>出口道闸收费弹窗 (自动感知)</h2>
         <button type="button" class="btn-secondary" style="height: 28px; padding: 0 10px; font-size: 12px;" onclick="pollPopup(true)">刷新感知</button>
       </div>
 
-      <!-- 看板大卡片 -->
+      <!-- 看板卡片 -->
       <div class="detected-hero" id="heroCard">
-        <div id="plateBadge" class="plate-badge empty">正在监听道闸出车...</div>
+        <div id="plateBadge" class="plate-badge empty">正在监听出口道闸出车...</div>
         
         <div class="metrics-row">
           <div class="metric-card">
@@ -359,29 +319,24 @@
         </div>
       </div>
 
-      <!-- 操作按钮组 (出口开闸 vs 场内预缴) -->
-      <div style="display: flex; gap: 10px; margin-top: 14px;">
-        <button class="btn-pay-now" id="mainPayBtn" style="flex: 2;" onclick="doSubmit('OUT_LOT')" disabled>
-          <span>立即代缴开闸放行</span>
-        </button>
-        <button type="button" class="btn-secondary" id="innerPayBtn" style="flex: 1; height: 44px; font-size: 13px; font-weight: 600; border-color: #cbd5e1;" onclick="doSubmit('IN_LOT')" disabled>
-          <span>仅场内预缴(不放行)</span>
-        </button>
-      </div>
+      <!-- 出口开闸唯一主操作按钮 -->
+      <button class="btn-pay-now" id="exitPayBtn" onclick="doExitPay()" disabled>
+        <span>立即代缴开闸放行</span>
+      </button>
 
       <div style="font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 10px;">
-        自动同步岗亭弹窗与算费，点击左侧按钮立即放行出场，点击右侧仅做场内记账
+        出口道闸识别有车弹出收费卡片时自动同步，点击按钮立即放行出场并关闭弹窗
       </div>
     </div>
 
-    <!-- 【右栏】支付方式与业务参数配置 -->
+    <!-- ==================== 【右栏】支付渠道配置 & 场内扫码预缴工具 ==================== -->
     <div class="panel">
       <div class="panel-header">
-        <h2>支付通道与参数配置</h2>
-        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">H51810900057</strong></span>
+        <h2>支付通道配置与场内工具</h2>
+        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">--</strong></span>
       </div>
 
-      <!-- 1. 支付方式全量选择 -->
+      <!-- 1. 全局支付方式选择 -->
       <div class="config-group">
         <div class="config-label">
           <span>选择支付渠道 (payType)</span>
@@ -417,29 +372,39 @@
             <option value="6">6 - 其他支付</option>
             <option value="custom">-- 自定义输入编码 --</option>
           </select>
-          <input type="number" id="payType" class="text-input" style="flex: 1; min-width: 90px;" value="57" placeholder="编码" onchange="onPayTypeCustomInput(this.value)">
+          <input type="number" id="payType" class="text-input" style="flex: 1; min-width: 80px;" value="57" placeholder="编码" onchange="onPayTypeCustomInput(this.value)">
         </div>
       </div>
 
-      <!-- 2. 手动覆盖 (备用) -->
-      <div class="config-group" style="margin-top: 18px;">
+      <!-- 2. 独立的场内扫码预缴工具 -->
+      <div class="config-group" style="margin-top: 10px;">
         <div class="config-label">
-          <span>手工车牌与查费 (可选)</span>
+          <span>场内扫码预缴测试 (车仍在场)</span>
         </div>
-        <div class="input-action-row">
-          <input type="text" id="manualCarNo" class="text-input" placeholder="留空则自动使用左侧弹窗车牌">
-          <button type="button" class="btn-secondary" onclick="queryCarFee()">查询费用</button>
-        </div>
-      </div>
-    </div>
-          <button type="button" class="btn-secondary" onclick="queryCarFee()">查询费用</button>
+        
+        <div class="inner-tool-box">
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+            模拟车主在场内车位扫码提前缴费，仅产生线上缴费流水，不触发道闸开闸
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="input-action-row">
+              <input type="text" id="innerCarNo" class="text-input" placeholder="输入场内车牌号...">
+              <button type="button" class="btn-secondary" onclick="queryInnerFee()">查在场费</button>
+            </div>
+
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <span style="font-size: 13px; color: #475569; white-space: nowrap;">预缴金额:</span>
+              <input type="number" id="innerMoney" class="text-input" step="0.01" value="10.00" placeholder="金额(元)">
+            </div>
+
+            <button type="button" class="btn-inner-pay" id="innerPayBtn" onclick="doInnerPay()">
+              <span>模拟场内扫码缴费 (不放行)</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <label class="checkbox-row">
-        <input type="checkbox" id="autoOut" checked>
-        <span>若未自动开闸，支付后联动调用车场出场放行接口</span>
-      </label>
     </div>
 
   </div>
@@ -464,7 +429,7 @@
         <strong id="rcptOrder">--</strong>
       </div>
       <div class="receipt-item">
-        <span>支付方式</span>
+        <span>支付方式与场景</span>
         <strong id="rcptType">--</strong>
       </div>
     </div>
@@ -564,10 +529,10 @@
       }
     }
 
-    // 轮询当前岗亭弹窗
+    // 轮询当前岗亭出口弹窗 (仅出口)
     async function pollPopup(manual) {
       try {
-        const serverIp = document.getElementById("serverIp").value.trim() || "192.168.65.58";
+        const serverIp = document.getElementById("serverIp").value.trim() || "192.168.65.59";
         const resp = await fetch("/api/popup/current?server_ip=" + encodeURIComponent(serverIp));
         const json = await resp.json();
         const popup = json.data;
@@ -578,8 +543,7 @@
         const heroChannel = document.getElementById("heroChannel");
         const heroInTime = document.getElementById("heroInTime");
         const heroTime = document.getElementById("heroTime");
-        const mainPayBtn = document.getElementById("mainPayBtn");
-        const innerPayBtn = document.getElementById("innerPayBtn");
+        const exitPayBtn = document.getElementById("exitPayBtn");
 
         if (popup && popup.car_no) {
           currentPopupData = popup;
@@ -588,98 +552,46 @@
 
           heroMoney.innerHTML = `${popup.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
           heroStay.innerHTML = `${popup.stay_minute || 30} <span style="font-size:14px;">分钟</span>`;
-          heroChannel.innerText = popup.channel_name || "02出口";
+          heroChannel.innerText = popup.channel_name || "出口";
           heroInTime.innerText = popup.in_time ? popup.in_time.split(" ")[1] : "未知";
           heroTime.innerText = popup.popup_time.split(" ")[1] || popup.popup_time;
 
-          mainPayBtn.disabled = false;
-          mainPayBtn.innerHTML = `<span>立即代缴开闸放行 [${popup.car_no}]</span>`;
-          innerPayBtn.disabled = false;
+          exitPayBtn.disabled = false;
+          exitPayBtn.innerHTML = `<span>立即代缴开闸放行 [${popup.car_no}]</span>`;
         } else {
           currentPopupData = null;
           badge.className = "plate-badge empty";
-          badge.innerText = "正在监听道闸出车...";
+          badge.innerText = "正在监听出口道闸出车...";
           heroMoney.innerHTML = `-- <span style="font-size:14px;">元</span>`;
           heroStay.innerHTML = `-- <span style="font-size:14px;">分钟</span>`;
           heroChannel.innerText = "--";
           heroInTime.innerText = "--";
           heroTime.innerText = "--";
 
-          const manualCar = document.getElementById("manualCarNo").value.trim();
-          mainPayBtn.disabled = !manualCar;
-          mainPayBtn.innerHTML = `<span>立即代缴开闸放行</span>`;
-          innerPayBtn.disabled = !manualCar;
+          exitPayBtn.disabled = true;
+          exitPayBtn.innerHTML = `<span>等待出口出车识别...</span>`;
         }
       } catch (e) {
         // ignore
       }
     }
 
-    // 主动车牌算费
-    async function queryCarFee() {
-      const carNo = document.getElementById("manualCarNo").value.trim().toUpperCase();
-      const serverIp = document.getElementById("serverIp").value.trim();
-      if (!carNo) {
-        alert("请输入待查费的车牌号码！");
+    // 左侧：出口代缴开闸
+    async function doExitPay() {
+      if (!currentPopupData || !currentPopupData.car_no) {
+        alert("当前没有检测到出口待缴车辆！");
         return;
       }
-      try {
-        const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
-        const json = await resp.json();
-        if (json.code === 200 && json.data) {
-          currentPopupData = {
-            car_no: carNo,
-            money: json.data.money,
-            dsn: "",
-            in_time: json.data.in_time,
-            stay_minute: json.data.stay_minute,
-            channel_name: "系统算费",
-            popup_time: new Date().toLocaleTimeString()
-          };
 
-          const badge = document.getElementById("plateBadge");
-          badge.className = "plate-badge";
-          badge.innerText = carNo;
-          document.getElementById("heroMoney").innerHTML = `${json.data.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
-          document.getElementById("heroStay").innerHTML = `${json.data.stay_minute} <span style="font-size:14px;">分钟</span>`;
-          document.getElementById("heroChannel").innerText = "后台算费";
-          document.getElementById("heroInTime").innerText = json.data.in_time.split(" ")[1] || json.data.in_time;
-          document.getElementById("heroTime").innerText = "刚同步";
-
-          document.getElementById("mainPayBtn").disabled = false;
-          document.getElementById("mainPayBtn").innerHTML = `<span>立即代缴开闸放行 [${carNo}]</span>`;
-          document.getElementById("innerPayBtn").disabled = false;
-        } else {
-          alert(json.msg || "未查到在场费用");
-        }
-      } catch (err) {
-        alert("查费失败: " + err.message);
-      }
-    }
-
-    // 提交支付: mode = 'OUT_LOT' (出口开闸) 或 'IN_LOT' (场内预缴)
-    async function doSubmit(mode) {
-      const isExit = (mode !== 'IN_LOT');
-      const btn = isExit ? document.getElementById("mainPayBtn") : document.getElementById("innerPayBtn");
+      const btn = document.getElementById("exitPayBtn");
       const serverIp = document.getElementById("serverIp").value.trim();
-      
-      const manualCar = document.getElementById("manualCarNo").value.trim().toUpperCase();
-      const carNo = manualCar || (currentPopupData ? currentPopupData.car_no : "");
-      const money = currentPopupData ? currentPopupData.money : 10.0;
+      const carNo = currentPopupData.car_no;
+      const money = currentPopupData.money;
       const payType = parseInt(document.getElementById("payType").value);
-      const dsn = isExit ? (currentPopupData ? currentPopupData.dsn : "") : "";
-      const autoOut = isExit;
-
-      if (!serverIp || !carNo) {
-        alert("未检测到弹窗车辆，请手动输入车牌！");
-        return;
-      }
-
-      localStorage.setItem("last_server_ip", serverIp);
+      const dsn = currentPopupData.dsn || "";
 
       btn.disabled = true;
-      const oldHtml = btn.innerHTML;
-      btn.innerHTML = `<span>⏳ 正在处理中...</span>`;
+      btn.innerHTML = `<span>正在开闸放行...</span>`;
 
       try {
         const resp = await fetch("/api/pay", {
@@ -691,54 +603,102 @@
             money: money,
             pay_type: payType,
             dsn: dsn,
-            auto_out: autoOut
+            auto_out: true
           })
         });
 
         const data = await resp.json();
         if (data.code === 200 && data.data) {
           const d = data.data;
-          const panel = document.getElementById("receiptPanel");
-          panel.className = "receipt-panel show";
-          document.getElementById("receiptTimestamp").innerText = d.pay_time;
-          document.getElementById("rcptCar").innerText = d.car_no;
-          document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
-          document.getElementById("rcptOrder").innerText = d.order_num;
-          document.getElementById("rcptType").innerText = d.pay_type_name + (isExit ? " (出口开闸)" : " (场内预缴)");
-
+          showReceipt(d, "出口扫码放行");
           setTimeout(() => pollPopup(true), 1500);
         } else {
-          alert("下发失败: " + (data.msg || "未知错误"));
+          alert("开闸放行失败: " + (data.msg || "未知错误"));
         }
       } catch (err) {
-        alert("调用服务异常: " + err.message);
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = oldHtml;
-      }
-    }
-
-        const data = await resp.json();
-        if (data.code === 200 && data.data) {
-          const d = data.data;
-          const panel = document.getElementById("receiptPanel");
-          panel.className = "receipt-panel show";
-          document.getElementById("receiptTimestamp").innerText = d.pay_time;
-          document.getElementById("rcptCar").innerText = d.car_no;
-          document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
-          document.getElementById("rcptOrder").innerText = d.order_num;
-          document.getElementById("rcptType").innerText = d.pay_type_name;
-
-          setTimeout(() => pollPopup(true), 1500);
-        } else {
-          alert("下发失败: " + (data.msg || "未知错误"));
-        }
-      } catch (err) {
-        alert("调用服务异常: " + err.message);
+        alert("请求异常: " + err.message);
       } finally {
         btn.disabled = false;
         btn.innerHTML = `<span>立即代缴开闸放行</span>`;
       }
+    }
+
+    // 右侧：场内查费
+    async function queryInnerFee() {
+      const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
+      const serverIp = document.getElementById("serverIp").value.trim();
+      if (!carNo) {
+        alert("请输入场内待查车牌号！");
+        return;
+      }
+      try {
+        const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
+        const json = await resp.json();
+        if (json.code === 200 && json.data) {
+          document.getElementById("innerMoney").value = json.data.money.toFixed(2);
+          alert(`查询成功！[${carNo}] 在场停放 ${json.data.stay_minute} 分钟，系统当前应缴 ${json.data.money.toFixed(2)} 元`);
+        } else {
+          alert(json.msg || "该车无需缴费或不在场内");
+        }
+      } catch (err) {
+        alert("查费失败: " + err.message);
+      }
+    }
+
+    // 右侧：场内预缴
+    async function doInnerPay() {
+      const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
+      const money = parseFloat(document.getElementById("innerMoney").value) || 0.0;
+      const serverIp = document.getElementById("serverIp").value.trim();
+      const payType = parseInt(document.getElementById("payType").value);
+
+      if (!carNo) {
+        alert("请输入场内车牌号！");
+        return;
+      }
+
+      const btn = document.getElementById("innerPayBtn");
+      btn.disabled = true;
+      btn.innerText = "正在下发预缴...";
+
+      try {
+        const resp = await fetch("/api/pay", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            server_ip: serverIp,
+            car_no: carNo,
+            money: money,
+            pay_type: payType,
+            dsn: "",           // 场内缴费不带通道 DSN
+            auto_out: false     // 场内缴费绝不开闸
+          })
+        });
+
+        const data = await resp.json();
+        if (data.code === 200 && data.data) {
+          const d = data.data;
+          showReceipt(d, "场内扫码预缴 (车不放行)");
+          alert(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`);
+        } else {
+          alert("预缴失败: " + (data.msg || "未知错误"));
+        }
+      } catch (err) {
+        alert("请求异常: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "模拟场内扫码缴费 (不放行)";
+      }
+    }
+
+    function showReceipt(d, sceneName) {
+      const panel = document.getElementById("receiptPanel");
+      panel.className = "receipt-panel show";
+      document.getElementById("receiptTimestamp").innerText = d.pay_time;
+      document.getElementById("rcptCar").innerText = d.car_no;
+      document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
+      document.getElementById("rcptOrder").innerText = d.order_num;
+      document.getElementById("rcptType").innerText = d.pay_type_name + " · " + sceneName;
     }
   </script>
 </body>

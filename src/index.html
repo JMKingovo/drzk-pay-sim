@@ -352,6 +352,27 @@
       color: #475569;
     }
     .receipt-auto-out.warn { background: #fef2f2; color: #b91c1c; font-weight: 500; }
+
+    /* 支付记录列表 */
+    .pay-row {
+      display: grid;
+      grid-template-columns: 92px 110px 90px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      background: #f8fafc;
+      margin-bottom: 6px;
+    }
+    .pay-row .pay-car { font-size: 14px; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; }
+    .pay-row .pay-money { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
+    .pay-row .pay-time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .pay-row .pay-detail { color: #475569; }
+    .pay-row .pay-order { color: var(--text-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; display: block; margin-top: 2px; }
+    .pay-row.warn { background: #fef2f2; }
+    .pay-row.warn .pay-detail { color: #b91c1c; font-weight: 500; }
+    .pay-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 6px 0 2px; }
   </style>
 </head>
 <body>
@@ -500,31 +521,13 @@
 
   </div>
 
-  <!-- 下方支付回执卡片 -->
+  <!-- 下方支付记录（后台留存，刷新页面不丢） -->
   <div class="receipt-panel" id="receiptPanel">
     <div class="receipt-header">
-      <span>支付注入成功，车场已接收并处理</span>
-      <span style="margin-left: auto; color: var(--text-muted); font-weight: normal;" id="receiptTimestamp"></span>
+      <span>支付记录</span>
+      <span style="margin-left: auto; color: var(--text-muted); font-weight: normal;" id="receiptCount"></span>
     </div>
-    <div class="receipt-grid">
-      <div class="receipt-item">
-        <span>车牌号码</span>
-        <strong id="rcptCar">--</strong>
-      </div>
-      <div class="receipt-item">
-        <span>实收金额</span>
-        <strong id="rcptMoney" style="color: var(--success);">--</strong>
-      </div>
-      <div class="receipt-item">
-        <span>交易流水号</span>
-        <strong id="rcptOrder">--</strong>
-      </div>
-      <div class="receipt-item">
-        <span>支付方式与场景</span>
-        <strong id="rcptType">--</strong>
-      </div>
-    </div>
-    <div class="receipt-auto-out" id="rcptAutoOut" style="display: none;"></div>
+    <div id="receiptList"></div>
   </div>
 
   <!-- 连接凭据配置弹窗 -->
@@ -584,6 +587,7 @@
       }
 
       fetchServerConfig();
+      loadPayHistory();
       // 定期同步状态与弹窗
       setInterval(() => {
         pollPopup(false);
@@ -754,8 +758,7 @@
 
         const data = await resp.json();
         if (data.code === 200 && data.data) {
-          const d = data.data;
-          showReceipt(d, "出口扫码放行");
+          loadPayHistory();
           setTimeout(() => pollPopup(true), 1500);
         } else {
           alert("开闸放行失败: " + (data.msg || "未知错误"));
@@ -884,8 +887,7 @@
 
         const data = await resp.json();
         if (data.code === 200 && data.data) {
-          const d = data.data;
-          showReceipt(d, "场内扫码预缴 (车不放行)");
+          loadPayHistory();
           alert(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`);
           // 该笔费用已结清，作废本次查费结果，再次下单需重新查费
           resetInnerFee("预缴已完成，再次预缴请重新查费");
@@ -901,26 +903,58 @@
       }
     }
 
-    function showReceipt(d, sceneName) {
-      const panel = document.getElementById("receiptPanel");
-      panel.className = "receipt-panel show";
-      document.getElementById("receiptTimestamp").innerText = d.pay_time;
-      document.getElementById("rcptCar").innerText = d.car_no;
-      document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
-      document.getElementById("rcptOrder").innerText = d.order_num;
-      document.getElementById("rcptType").innerText = d.pay_type_name + " · " + sceneName;
-
-      // 出场联动结果必须显性化：联动失败时车虽已缴费但闸没开，不能只显示"支付成功"
-      const autoOut = document.getElementById("rcptAutoOut");
-      if (d.auto_out_result) {
-        const isWarn = /中止|失败/.test(d.auto_out_result);
-        autoOut.className = "receipt-auto-out" + (isWarn ? " warn" : "");
-        autoOut.innerText = (isWarn ? "⚠ 出场联动未完成：" : "出场联动：") + d.auto_out_result;
-        autoOut.style.display = "block";
-      } else {
-        autoOut.style.display = "none";
-        autoOut.innerText = "";
+    // ============ 支付记录（存在后台，刷新页面不会丢）============
+    async function loadPayHistory() {
+      try {
+        const res = await (await fetch("/api/pay/history")).json();
+        renderPayHistory(res.code === 200 && res.data ? res.data : []);
+      } catch (e) {
+        // ignore
       }
+    }
+
+    function renderPayHistory(list) {
+      const panel = document.getElementById("receiptPanel");
+      const box = document.getElementById("receiptList");
+      const count = document.getElementById("receiptCount");
+
+      // 一笔都没有就整块隐藏，避免占地方
+      if (!list.length) {
+        panel.className = "receipt-panel";
+        count.innerText = "";
+        box.innerHTML = "";
+        return;
+      }
+
+      panel.className = "receipt-panel show";
+      count.innerText = "最近 " + list.length + " 笔（最新在前）";
+      box.innerHTML = list.map(d => {
+        const scene = d.is_lane ? "出口扫码放行" : "场内扫码预缴 (车不放行)";
+        const warn = d.auto_out_result && /中止|失败/.test(d.auto_out_result);
+        // 出场联动失败时车已缴费但闸没开，必须显性标出来，不能只显示"成功"
+        const detail = warn
+          ? "⚠ 出场联动未完成：" + d.auto_out_result
+          : d.auto_out_result
+            ? "出场联动：" + d.auto_out_result
+            : d.pay_type_name + " · " + scene;
+        const ctxTip = d.is_lane && !d.billing_context_from_park
+          ? "<span style='color:#b45309;'>（未取到真实计费上下文，可能被车场记成定点收费）</span>"
+          : "";
+        return `<div class="pay-row${warn ? " warn" : ""}">
+          <div class="pay-car">${escapeHtml(d.car_no)}</div>
+          <div class="pay-money">${d.money.toFixed(2)} 元</div>
+          <div class="pay-time">${escapeHtml((d.pay_time || "").slice(5))}</div>
+          <div class="pay-detail">${escapeHtml(detail)} ${ctxTip}
+            <span class="pay-order">${escapeHtml(d.order_num)} · ${escapeHtml(d.target_park_no || "")}</span>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, c => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
     }
 
     // 车场编号为空即代表未探测成功，绝不能显示成某个"看起来正常"的编号

@@ -4,11 +4,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use chrono::Local;
 
-use crate::models::{DetectedPopup, ParkDetails, ServerConfig};
+use crate::models::{DetectedPopup, ParkDetails, PayResultData, ServerConfig};
 use crate::remote;
 
 pub type SharedPopup = Arc<Mutex<Option<DetectedPopup>>>;
 pub type SharedConfig = Arc<Mutex<ServerConfig>>;
+/// 本进程内已下发的支付记录 (最近若干笔，供界面刷新后仍能查看)
+pub type SharedPayHistory = Arc<Mutex<Vec<PayResultData>>>;
+
+/// 支付记录最多保留的条数
+pub const PAY_HISTORY_LIMIT: usize = 50;
 
 pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup) {
     let cfg = shared_config.clone();

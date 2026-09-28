@@ -36,6 +36,7 @@ pub fn execute_payment(
     };
 
     // 出口缴费：向车场自己的算费接口取该车真实的入场时间/入场ID/停放时长
+    let mut billing_from_park = false;
     let (entry_time, in_id, duration) = if is_lane_pay {
         match fetch_billing_context(&req.server_ip, &req.car_no) {
             Some(ctx) => {
@@ -43,6 +44,7 @@ pub fn execute_payment(
                     "  🧾 取到真实计费上下文: 入场 {}, 停放 {} 分钟, inId {}",
                     ctx.in_time, ctx.stay_minute, ctx.in_id
                 );
+                billing_from_park = true;
                 (ctx.in_time, ctx.in_id, ctx.stay_minute)
             }
             None => {
@@ -148,6 +150,8 @@ pub fn execute_payment(
         target_park_no: req.park_no.clone(),
         target_server_ip: req.server_ip.clone(),
         auto_out_result: auto_out_res,
+        is_lane: is_lane_pay,
+        billing_context_from_park: billing_from_park,
     })
 }
 

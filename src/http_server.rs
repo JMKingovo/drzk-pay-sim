@@ -9,7 +9,9 @@ use crate::models::{
 };
 use crate::remote;
 use crate::service::execute_payment;
-use crate::ws_listener::{probe_server_details, SharedConfig, SharedPopup};
+use crate::ws_listener::{
+    probe_server_details, SharedConfig, SharedPayHistory, SharedPopup, PAY_HISTORY_LIMIT,
+};
 
 /// 组装回给界面的凭据视图 (不含密码明文)
 fn remote_config_view() -> RemoteConfigView {
@@ -25,7 +27,12 @@ fn remote_config_view() -> RemoteConfigView {
     }
 }
 
-pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: SharedPopup) {
+pub fn start_http_server(
+    addr: &str,
+    shared_config: SharedConfig,
+    shared_popup: SharedPopup,
+    shared_history: SharedPayHistory,
+) {
     let server = match Server::http(addr) {
         Ok(s) => s,
         Err(e) => {
@@ -187,6 +194,13 @@ pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: 
             continue;
         }
 
+        // 2.3 已下发的支付记录 (界面刷新后仍可查看)
+        if url == "/api/pay/history" && method == "GET" {
+            let history = { shared_history.lock().unwrap().clone() };
+            send_json(request, 200, ApiResponse { code: 200, msg: "OK".into(), data: Some(history) });
+            continue;
+        }
+
         // 3. 执行支付注入 (POST /api/pay)
         if (url == "/api/pay" || url == "/api/pay/simulate") && method == "POST" {
             let mut body_str = String::new();
@@ -245,8 +259,16 @@ pub fn start_http_server(addr: &str, shared_config: SharedConfig, shared_popup: 
             match execute_payment(&pay_req, &mqtt_host, &mqtt_user, &mqtt_pwd) {
                 Ok(result) => {
                     println!("  -> 注入成功！单号: {}", result.order_num);
-                    let mut lock = shared_popup.lock().unwrap();
-                    *lock = None;
+                    {
+                        let mut lock = shared_popup.lock().unwrap();
+                        *lock = None;
+                    }
+                    // 记录本笔，最新在前，供界面刷新后查看
+                    {
+                        let mut hist = shared_history.lock().unwrap();
+                        hist.insert(0, result.clone());
+                        hist.truncate(PAY_HISTORY_LIMIT);
+                    }
 
                     send_json(request, 200, ApiResponse {
                         code: 200,

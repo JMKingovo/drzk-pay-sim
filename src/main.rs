@@ -97,6 +97,7 @@ fn main() {
         let shared_config = Arc::new(Mutex::new(cfg));
 
         let shared_popup = Arc::new(Mutex::new(None));
+        let shared_history: ws_listener::SharedPayHistory = Arc::new(Mutex::new(Vec::new()));
         start_ws_listener(shared_config.clone(), shared_popup.clone());
 
         let browser_url = format!("http://127.0.0.1:{}", port);
@@ -114,7 +115,7 @@ fn main() {
         }
 
         let addr = format!("0.0.0.0:{}", port);
-        http_server::start_http_server(&addr, shared_config, shared_popup);
+        http_server::start_http_server(&addr, shared_config, shared_popup, shared_history);
         return;
     }
 

@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use chrono::Local;
 
-use crate::models::{DetectedPopup, ServerConfig};
+use crate::models::{DetectedPopup, ParkDetails, ServerConfig};
+use crate::remote;
 
 pub type SharedPopup = Arc<Mutex<Option<DetectedPopup>>>;
 pub type SharedConfig = Arc<Mutex<ServerConfig>>;
@@ -26,6 +27,26 @@ pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup)
                 continue;
             }
 
+            // 车场信息尚未探测成功时不做无意义的通道连接，
+            // 否则通道握手失败的状态会把"探测失败"的真实原因覆盖掉
+            if park_no.is_empty() {
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+
+            // 没有岗亭信息就没有可连接的通道，如实说明而不是去握手一个空路径
+            if box_id.is_empty() || user.is_empty() {
+                let mut c = cfg.lock().unwrap();
+                c.is_connected = false;
+                c.status_text = format!(
+                    "车场 {} 已探测 (编号 {})，但未取到岗亭信息，无法监听出口出车；可重新点击「连接车场」重试",
+                    target_ip, park_no
+                );
+                drop(c);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+
             if target_ip != last_ip {
                 println!("🔄 检测到目标车场 IP 切换: {} -> {}", last_ip, target_ip);
                 last_ip = target_ip.clone();
@@ -36,10 +57,15 @@ pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup)
 
             match connect_ws(&addr, &path) {
                 Ok(mut stream) => {
+                    let connected_text = if park_no.is_empty() {
+                        format!("已连通 {}:8089，但车场编号未探测成功，请重新连接车场", target_ip)
+                    } else {
+                        format!("已连接 {}:8089 (岗亭:{}, 车场:{})", target_ip, box_id, park_no)
+                    };
                     {
                         let mut c = cfg.lock().unwrap();
                         c.is_connected = true;
-                        c.status_text = format!("已连接 {}:8089 (岗亭:{}, 车场:{})", target_ip, box_id, park_no);
+                        c.status_text = connected_text;
                     }
                     println!("🟢 成功连通车场 [{}] WebSocket: ws://{}{}", target_ip, addr, path);
                     listen_frames(&mut stream, &cfg, &pop);
@@ -65,69 +91,86 @@ pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup)
 }
 
 /// 主动探测车场配置 (从 MySQL 查出真实 PARK_NUM、在线岗亭及专属支付 MQTT 凭证)
-pub fn probe_server_details(server_ip: &str) -> (String, String, String, String, String, String) {
-    use std::process::Command;
-
-    let mut park_no = "H51810900057".to_string();
-    let mut box_id = "1".to_string();
-    let mut user = "超级管理员".to_string();
-    let mut mqtt_host = "121.37.253.10:1883".to_string();
-    let mut mqtt_user = "dr-emqx".to_string();
-    let mut mqtt_pwd = "qNnbPZZ6yj4Ynyx5NoIg".to_string();
-
+///
+/// 探测失败一律返回 Err，绝不回退到任何写死的车场编号或 MQTT 地址。
+pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
     // 1. 查系统参数中的 PARK_NUM 和支付 MQTT Broker 配置
-    let sql_params = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"\
-        SELECT parameter_code, parameter_value FROM sys_parameters \
-        WHERE parameter_code IN ('PARK_NUM', 'MQTT_SETTING_PAY_URL_ONLINE', 'MQTT_SETTING_PAY_USERNAME', 'MQTT_SETTING_PAY_PASSWORD');\" 2>/dev/null";
-    
-    if let Ok(out) = Command::new("sshpass")
-        .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), sql_params])
-        .output()
-    {
-        let txt = String::from_utf8_lossy(&out.stdout);
-        for line in txt.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                let code = parts[0].trim();
-                let val = parts[1].trim();
-                match code {
-                    "PARK_NUM" if !val.is_empty() => park_no = val.to_string(),
-                    "MQTT_SETTING_PAY_URL_ONLINE" if !val.is_empty() => {
-                        // 例如 "tcp://a.drzk.cn:62181,tcp://b.drzk.cn:62181" 或 "tcp://121.37.253.10:1883"
-                        let first_url = val.split(',').next().unwrap_or(val).trim();
-                        let clean_host = first_url.trim_start_matches("tcp://").trim_start_matches("ssl://").trim();
-                        if !clean_host.is_empty() {
-                            mqtt_host = clean_host.to_string();
-                        }
-                    }
-                    "MQTT_SETTING_PAY_USERNAME" if !val.is_empty() => mqtt_user = val.to_string(),
-                    "MQTT_SETTING_PAY_PASSWORD" if !val.is_empty() => mqtt_pwd = val.to_string(),
-                    _ => {}
+    let sql_params = "SELECT parameter_code, parameter_value FROM sys_parameters \
+        WHERE parameter_code IN ('PARK_NUM', 'MQTT_SETTING_PAY_URL_ONLINE', 'MQTT_SETTING_PAY_USERNAME', 'MQTT_SETTING_PAY_PASSWORD');";
+
+    let params_out = remote::run_sql(server_ip, sql_params)
+        .map_err(|e| format!("读取车场参数失败: {}", e))?;
+
+    let mut park_no = String::new();
+    let mut mqtt_host = String::new();
+    let mut mqtt_user = String::new();
+    let mut mqtt_pwd = String::new();
+
+    for row in remote::parse_rows(&params_out) {
+        if row.len() < 2 {
+            continue;
+        }
+        match row[0].as_str() {
+            "PARK_NUM" => park_no = row[1].clone(),
+            "MQTT_SETTING_PAY_URL_ONLINE" => {
+                // 例如 "tcp://a.drzk.cn:62181,tcp://b.drzk.cn:62181" 或 "tcp://121.37.253.10:1883"
+                let first_url = row[1].split(',').next().unwrap_or("").trim();
+                let clean_host = first_url
+                    .trim_start_matches("tcp://")
+                    .trim_start_matches("ssl://")
+                    .trim();
+                if !clean_host.is_empty() {
+                    mqtt_host = clean_host.to_string();
                 }
             }
+            "MQTT_SETTING_PAY_USERNAME" => mqtt_user = row[1].clone(),
+            "MQTT_SETTING_PAY_PASSWORD" => mqtt_pwd = row[1].clone(),
+            _ => {}
         }
     }
 
-    // 2. 查当前在线岗亭与操作员
-    let sql_booth = "PAGER=cat mysql -uroot -p123456 ykt -B -e \"SELECT box_id, loginName FROM park_local_set WHERE online=1 LIMIT 1;\" 2>/dev/null";
-    if let Ok(out) = Command::new("sshpass")
-        .args(&["-p", "root", "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=2", &format!("root@{}", server_ip), sql_booth])
-        .output()
-    {
-        let txt = String::from_utf8_lossy(&out.stdout);
-        if let Some(val) = txt.lines().nth(1) {
-            let parts: Vec<&str> = val.split('\t').collect();
-            if parts.len() >= 2 {
-                box_id = parts[0].trim().to_string();
-                let u = parts[1].trim();
-                if !u.is_empty() {
-                    user = u.to_string();
-                }
-            }
-        }
+    if park_no.is_empty() {
+        return Err(format!(
+            "车场 {} 的数据库里没有 PARK_NUM，无法确定车场编号",
+            server_ip
+        ));
     }
 
-    (park_no, box_id, user, mqtt_host, mqtt_user, mqtt_pwd)
+    if mqtt_host.is_empty() {
+        return Err(format!(
+            "车场 {} 未配置 MQTT_SETTING_PAY_URL_ONLINE，无法确定支付 Broker 地址",
+            server_ip
+        ));
+    }
+
+    // 2. 查岗亭与操作员 (用于连接出口监听通道)
+    //    实测岗亭 online 标志为 0 时通道依然接受连接，因此这里优先选在线岗亭、但不强制要求在线，
+    //    否则岗亭心跳一旦掉线会连带把出口监听功能一起关掉。
+    //    岗亭只影响出口监听与开闸联动，不影响支付投递，取不到时也不判定整体失败。
+    let sql_booth =
+        "SELECT box_id, loginName FROM park_local_set ORDER BY online DESC, box_id ASC LIMIT 1;";
+    let (box_id, login_name) = match remote::run_sql(server_ip, sql_booth) {
+        Ok(out) => match remote::parse_rows(&out).first() {
+            Some(row) if row.len() >= 2 && !row[0].is_empty() => (row[0].clone(), row[1].clone()),
+            _ => {
+                println!("  ⚠️ 车场 {} 未取到岗亭信息，出口监听与开闸联动将不可用", server_ip);
+                (String::new(), String::new())
+            }
+        },
+        Err(e) => {
+            println!("  ⚠️ 车场 {} 的岗亭信息读取失败 ({}), 出口监听与开闸联动将不可用", server_ip, e);
+            (String::new(), String::new())
+        }
+    };
+
+    Ok(ParkDetails {
+        park_no,
+        box_id,
+        login_name,
+        mqtt_host,
+        mqtt_user,
+        mqtt_pwd,
+    })
 }
 
 fn connect_ws(addr: &str, path: &str) -> Result<TcpStream, String> {

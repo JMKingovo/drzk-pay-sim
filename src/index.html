@@ -41,6 +41,82 @@
       border-radius: 6px;
     }
     .nav-ip-switch span { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+    .btn-nav-cfg {
+      height: 28px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: #fff;
+      border-radius: 6px;
+      color: #475569;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .btn-nav-cfg:hover { background: #f1f5f9; color: #0f172a; border-color: #cbd5e1; }
+
+    /* 配置弹窗 */
+    .modal-mask {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.35);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-mask.show { display: flex; }
+    .modal-card {
+      width: 420px;
+      max-width: calc(100vw - 40px);
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+      overflow: hidden;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 14px;
+      font-weight: 600;
+      color: #334155;
+    }
+    .modal-close {
+      border: none;
+      background: transparent;
+      font-size: 15px;
+      color: var(--text-sub);
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px 6px;
+      border-radius: 4px;
+    }
+    .modal-close:hover { background: #f1f5f9; color: #0f172a; }
+    .modal-body { padding: 16px 18px 4px; }
+    .cfg-row { margin-bottom: 12px; }
+    .cfg-row label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 5px; }
+    .cfg-current {
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--text-muted);
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      word-break: break-all;
+    }
+    .cfg-current strong { color: #1e293b; }
+    .modal-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 18px 16px;
+    }
     .nav-ip-input {
       border: 1px solid transparent;
       background: #fff;
@@ -267,6 +343,15 @@
     }
     .receipt-item span { color: var(--text-muted); display: block; margin-bottom: 2px; }
     .receipt-item strong { color: #1e293b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .receipt-auto-out {
+      margin-top: 10px;
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: #f1f5f9;
+      color: #475569;
+    }
+    .receipt-auto-out.warn { background: #fef2f2; color: #b91c1c; font-weight: 500; }
   </style>
 </head>
 <body>
@@ -278,6 +363,12 @@
         <span>目标车场 IP:</span>
         <input type="text" id="serverIp" class="nav-ip-input" value="192.168.65.59" placeholder="例如: 192.168.65.59" onkeydown="if(event.key==='Enter') switchServer()">
         <button type="button" class="btn-secondary" style="height: 28px; padding: 0 12px; font-size: 12px; background: var(--primary); color: #fff; border: none; font-weight: 600;" onclick="switchServer()">连接车场</button>
+      </div>
+
+      <div class="nav-ip-switch" style="gap: 6px;">
+        <span>连接凭据:</span>
+        <button type="button" class="btn-nav-cfg" onclick="openRemoteConfig('ssh')">SSH</button>
+        <button type="button" class="btn-nav-cfg" onclick="openRemoteConfig('db')">数据库</button>
       </div>
 
       <div class="status-badge" style="margin-left: auto;">
@@ -386,16 +477,21 @@
         <div class="inner-tool-box">
           <div style="display: flex; flex-direction: column; gap: 10px;">
             <div class="input-action-row">
-              <input type="text" id="innerCarNo" class="text-input" placeholder="输入车牌号 (例如: 粤B12345)" onkeydown="if(event.key==='Enter') queryInnerFee()">
-              <button type="button" class="btn-secondary" onclick="queryInnerFee()">查询在场费用</button>
+              <input type="text" id="innerCarNo" class="text-input" placeholder="输入车牌号 (例如: 粤B12345)"
+                     oninput="onInnerCarNoInput()" onkeydown="if(event.key==='Enter') queryInnerFee()">
+              <button type="button" class="btn-secondary" id="innerQueryBtn" onclick="queryInnerFee()">查询在场费用</button>
             </div>
 
             <div id="innerFeeHint" style="font-size: 12px; color: var(--success); font-weight: 500; display: none;"></div>
-            <input type="hidden" id="innerMoney" value="0.00">
 
-            <button type="button" class="btn-inner-pay" id="innerPayBtn" onclick="doInnerPay()">
-              <span>模拟场内预缴 (车不放行)</span>
+            <!-- 步骤 ②：必须先完成步骤 ① 查费，本按钮才会解锁 -->
+            <button type="button" class="btn-inner-pay" id="innerPayBtn" onclick="doInnerPay()" disabled>
+              <span>请先查询在场费用</span>
             </button>
+
+            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6; border-top: 1px dashed var(--border); padding-top: 8px;">
+              ① 输入车牌查询在场费用 → ② 查到金额后模拟预缴。预缴金额完全取自后台算费，不可手工填写；预缴只生成线上流水，车辆仍留在场内。
+            </div>
           </div>
         </div>
       </div>
@@ -426,6 +522,54 @@
       <div class="receipt-item">
         <span>支付方式与场景</span>
         <strong id="rcptType">--</strong>
+      </div>
+    </div>
+    <div class="receipt-auto-out" id="rcptAutoOut" style="display: none;"></div>
+  </div>
+
+  <!-- 连接凭据配置弹窗 -->
+  <div class="modal-mask" id="cfgMask">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span id="cfgTitle">配置</span>
+        <button type="button" class="modal-close" onclick="closeRemoteConfig()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="cfgSshGroup" style="display: none;">
+          <div class="cfg-row">
+            <label>SSH 登录用户</label>
+            <input type="text" id="cfgSshUser" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>SSH 登录密码</label>
+            <input type="password" id="cfgSshPwd" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>SSH 端口</label>
+            <input type="text" id="cfgSshPort" class="text-input" placeholder="留空表示不修改">
+          </div>
+        </div>
+
+        <div id="cfgDbGroup" style="display: none;">
+          <div class="cfg-row">
+            <label>数据库用户</label>
+            <input type="text" id="cfgDbUser" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>数据库密码</label>
+            <input type="password" id="cfgDbPwd" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>数据库名</label>
+            <input type="text" id="cfgDbName" class="text-input" placeholder="留空表示不修改">
+          </div>
+        </div>
+
+        <div class="cfg-current" id="cfgCurrent">正在读取当前配置...</div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-secondary" onclick="closeRemoteConfig()">取消</button>
+        <button type="button" class="btn-secondary" id="cfgSaveBtn" style="background: var(--primary); color: #fff; border: none; font-weight: 600;" onclick="saveRemoteConfig()">保存并重连</button>
       </div>
     </div>
   </div>
@@ -466,13 +610,17 @@
         const res = await resp.json();
         if (res.code === 200 && res.data) {
           localStorage.setItem("last_server_ip", serverIp);
-          document.getElementById("displayParkNo").innerText = res.data.park_no;
+          document.getElementById("displayParkNo").innerText = fmtParkNo(res.data.park_no);
           navStatus.innerText = res.data.status_text || ("已连接 " + serverIp);
           dot.style.background = res.data.is_connected ? "#10b981" : "#f59e0b";
+          // 已切换车场，旧车场查到的费用一律作废
+          resetInnerFee("已切换车场，请重新查询费用");
           pollPopup(true);
         } else {
-          navStatus.innerText = "切换失败: " + (res.msg || "");
+          const msg = res.msg || "未知错误";
+          navStatus.innerText = "切换失败: " + msg.split("\n")[0];
           dot.style.background = "#ef4444";
+          alert("连接车场失败\n" + msg);
         }
       } catch (e) {
         navStatus.innerText = "连接请求异常: " + e.message;
@@ -486,7 +634,7 @@
         const res = await resp.json();
         if (res.code === 200 && res.data) {
           const cfg = res.data;
-          document.getElementById("displayParkNo").innerText = cfg.park_no;
+          document.getElementById("displayParkNo").innerText = fmtParkNo(cfg.park_no);
           document.getElementById("navWsStatus").innerText = cfg.status_text;
           const dot = document.getElementById("wsIndicator");
           dot.style.background = cfg.is_connected ? "#10b981" : "#ef4444";
@@ -584,6 +732,7 @@
       const money = currentPopupData.money;
       const payType = parseInt(document.getElementById("payType").value);
       const dsn = currentPopupData.dsn || "";
+      const channelName = currentPopupData.channel_name || "";
 
       btn.disabled = true;
       btn.innerHTML = `<span>正在开闸放行...</span>`;
@@ -598,6 +747,7 @@
             money: money,
             pay_type: payType,
             dsn: dsn,
+            channel_name: channelName,
             auto_out: true
           })
         });
@@ -618,7 +768,37 @@
       }
     }
 
-    // 右侧：手工车牌查费 (仅更新右侧本身，绝不干扰左侧出口看板)
+    // ============ 手工查费 → 场内预缴：严格的「先查费后预缴」两段式流程 ============
+    // 金额唯一可信来源是后台算费结果，本状态由查费成功时写入，任何变更都会立即失效
+    let innerFeeState = { carNo: null, money: 0.0, stayMinute: 0, queryTime: null };
+
+    // 作废已查到的费用并重新上锁预缴按钮
+    function resetInnerFee(payBtnText) {
+      innerFeeState = { carNo: null, money: 0.0, stayMinute: 0, queryTime: null };
+
+      const payBtn = document.getElementById("innerPayBtn");
+      payBtn.disabled = true;
+      payBtn.innerHTML = `<span>${payBtnText || "请先查询在场费用"}</span>`;
+
+      const hint = document.getElementById("innerFeeHint");
+      hint.style.display = "none";
+      hint.innerText = "";
+    }
+
+    // 车牌被改动时，上一次的查费结果即刻作废，杜绝「查A车、缴B车」
+    function onInnerCarNoInput() {
+      const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
+      if (innerFeeState.carNo && carNo !== innerFeeState.carNo) {
+        resetInnerFee("车牌已变更，请重新查询费用");
+      }
+    }
+
+    function formatClock(d) {
+      const p = (n) => String(n).padStart(2, "0");
+      return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    // 步骤 ①：手工车牌查费 (仅更新右侧本身，绝不干扰左侧出口看板)
     async function queryInnerFee() {
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
       const serverIp = document.getElementById("serverIp").value.trim();
@@ -626,7 +806,13 @@
         alert("请输入车牌号后再查询费用！");
         return;
       }
+
       const hint = document.getElementById("innerFeeHint");
+      const queryBtn = document.getElementById("innerQueryBtn");
+
+      // 查费期间先上锁，防止用上一次的旧金额抢跑下单
+      resetInnerFee("正在查询，请稍候...");
+      queryBtn.disabled = true;
       hint.style.display = "block";
       hint.style.color = "var(--text-muted)";
       hint.innerText = "正在查询在场费用...";
@@ -636,24 +822,30 @@
         const json = await resp.json();
         if (json.code === 200 && json.data) {
           const moneyVal = json.data.money.toFixed(2);
-          document.getElementById("innerMoney").value = moneyVal;
-          hint.style.display = "block";
-          hint.style.color = "var(--success)";
-          hint.innerText = `在场算费: ${moneyVal} 元 (停放 ${json.data.stay_minute} 分钟)`;
+          const stayMin = json.data.stay_minute || 0;
 
-          const innerBtn = document.getElementById("innerPayBtn");
-          innerBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
+          // 查费成功：记录本次结果（车牌 + 金额 + 时间），并解锁步骤 ②
+          innerFeeState = { carNo, money: json.data.money, stayMinute: stayMin, queryTime: new Date() };
+
+          hint.style.color = "var(--success)";
+          hint.innerText = `已查到 [${carNo}] 在场费用: ${moneyVal} 元 (停放 ${stayMin} 分钟) · 查费时间 ${formatClock(innerFeeState.queryTime)}`;
+
+          const payBtn = document.getElementById("innerPayBtn");
+          payBtn.disabled = false;
+          payBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
         } else {
-          hint.style.display = "none";
+          resetInnerFee("未查到在场费用，请重新查询");
           alert(json.msg || "未查到在场费用或车辆已出场");
         }
       } catch (err) {
-        hint.style.display = "none";
+        resetInnerFee("查费失败，请重新查询");
         alert("查费失败: " + err.message);
+      } finally {
+        queryBtn.disabled = false;
       }
     }
 
-    // 右侧：场内预缴 (金额完全来自系统后台算费)
+    // 步骤 ②：场内预缴 (金额强制取自步骤 ① 的查费结果)
     async function doInnerPay() {
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
       const serverIp = document.getElementById("serverIp").value.trim();
@@ -664,28 +856,16 @@
         return;
       }
 
-      let money = parseFloat(document.getElementById("innerMoney").value) || 0.0;
-      // 如果尚未查费，点击时自动查出真实在场费用
-      if (money <= 0) {
-        try {
-          const resp = await fetch(`/api/fee/current?server_ip=${serverIp}&car_no=${encodeURIComponent(carNo)}`);
-          const json = await resp.json();
-          if (json.code === 200 && json.data) {
-            money = json.data.money;
-            document.getElementById("innerMoney").value = money.toFixed(2);
-          } else {
-            alert(json.msg || "未查到该车辆的在场费用");
-            return;
-          }
-        } catch (e) {
-          alert("查费请求失败: " + e.message);
-          return;
-        }
+      // 硬性门禁：没有成功查费记录、或查费车牌与当前输入不一致，一律拒绝预缴
+      if (!innerFeeState.carNo || innerFeeState.carNo !== carNo) {
+        alert(`请先点击「查询在场费用」，确认 [${carNo}] 的应付金额后再模拟预缴。`);
+        resetInnerFee();
+        return;
       }
 
+      const money = innerFeeState.money;
       const btn = document.getElementById("innerPayBtn");
       btn.disabled = true;
-      const oldHtml = btn.innerHTML;
       btn.innerText = "正在下发预缴...";
 
       try {
@@ -707,14 +887,17 @@
           const d = data.data;
           showReceipt(d, "场内扫码预缴 (车不放行)");
           alert(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`);
+          // 该笔费用已结清，作废本次查费结果，再次下单需重新查费
+          resetInnerFee("预缴已完成，再次预缴请重新查费");
         } else {
           alert("预缴失败: " + (data.msg || "未知错误"));
+          btn.disabled = false;
+          btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
         }
       } catch (err) {
         alert("请求异常: " + err.message);
-      } finally {
         btn.disabled = false;
-        btn.innerHTML = oldHtml;
+        btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
       }
     }
 
@@ -726,6 +909,107 @@
       document.getElementById("rcptMoney").innerText = d.money.toFixed(2) + " 元";
       document.getElementById("rcptOrder").innerText = d.order_num;
       document.getElementById("rcptType").innerText = d.pay_type_name + " · " + sceneName;
+
+      // 出场联动结果必须显性化：联动失败时车虽已缴费但闸没开，不能只显示"支付成功"
+      const autoOut = document.getElementById("rcptAutoOut");
+      if (d.auto_out_result) {
+        const isWarn = /中止|失败/.test(d.auto_out_result);
+        autoOut.className = "receipt-auto-out" + (isWarn ? " warn" : "");
+        autoOut.innerText = (isWarn ? "⚠ 出场联动未完成：" : "出场联动：") + d.auto_out_result;
+        autoOut.style.display = "block";
+      } else {
+        autoOut.style.display = "none";
+        autoOut.innerText = "";
+      }
+    }
+
+    // 车场编号为空即代表未探测成功，绝不能显示成某个"看起来正常"的编号
+    function fmtParkNo(v) {
+      return v && v.trim() ? v : "未探测";
+    }
+
+    // ============ 连接凭据配置（SSH / 数据库）============
+    let cfgMode = "ssh";
+    const CFG_FIELDS = ["cfgSshUser", "cfgSshPwd", "cfgSshPort", "cfgDbUser", "cfgDbPwd", "cfgDbName"];
+
+    function openRemoteConfig(mode) {
+      cfgMode = mode;
+      document.getElementById("cfgTitle").innerText = mode === "ssh" ? "SSH 登录凭据" : "数据库凭据";
+      document.getElementById("cfgSshGroup").style.display = mode === "ssh" ? "block" : "none";
+      document.getElementById("cfgDbGroup").style.display = mode === "db" ? "block" : "none";
+      document.getElementById("cfgMask").className = "modal-mask show";
+      // 输入框一律留空：保持"留空=不修改"的语义，避免把回显值当成新值提交
+      CFG_FIELDS.forEach(id => { document.getElementById(id).value = ""; });
+      loadRemoteConfig();
+    }
+
+    function closeRemoteConfig() {
+      document.getElementById("cfgMask").className = "modal-mask";
+    }
+
+    async function loadRemoteConfig() {
+      const el = document.getElementById("cfgCurrent");
+      el.innerText = "正在读取当前配置...";
+      try {
+        const res = await (await fetch("/api/remote/config")).json();
+        if (res.code === 200 && res.data) {
+          const c = res.data;
+          el.innerHTML =
+            `当前生效：SSH <strong>${c.ssh_user}</strong> : <strong>${c.ssh_port}</strong> ｜ ` +
+            `MySQL <strong>${c.db_user}</strong> @ <strong>${c.db_name}</strong><br>` +
+            `密码状态：SSH ${c.ssh_pwd_set ? "已设置（不回显）" : "未设置"} ｜ ` +
+            `数据库 ${c.db_pwd_set ? "已设置（不回显）" : "未设置"}<br>` +
+            `配置文件：${c.config_file}`;
+        } else {
+          el.innerText = "读取当前配置失败: " + (res.msg || "未知错误");
+        }
+      } catch (e) {
+        el.innerText = "读取当前配置失败: " + e.message;
+      }
+    }
+
+    async function saveRemoteConfig() {
+      const payload = {};
+      if (cfgMode === "ssh") {
+        payload.ssh_user = document.getElementById("cfgSshUser").value.trim();
+        payload.ssh_pwd = document.getElementById("cfgSshPwd").value;   // 密码不 trim，避免误删首尾空格
+        payload.ssh_port = document.getElementById("cfgSshPort").value.trim();
+      } else {
+        payload.db_user = document.getElementById("cfgDbUser").value.trim();
+        payload.db_pwd = document.getElementById("cfgDbPwd").value;
+        payload.db_name = document.getElementById("cfgDbName").value.trim();
+      }
+
+      const btn = document.getElementById("cfgSaveBtn");
+      btn.disabled = true;
+      btn.innerText = "保存中...";
+      try {
+        const res = await (await fetch("/api/remote/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })).json();
+
+        if (res.code !== 200) {
+          alert("保存失败: " + (res.msg || "未知错误"));
+          return;
+        }
+
+        closeRemoteConfig();
+
+        // 凭据变了就用新凭据重连一次当前车场，让改动立刻生效
+        const ip = document.getElementById("serverIp").value.trim();
+        if (ip) {
+          await switchServer();
+        } else {
+          alert(res.msg || "凭据已保存");
+        }
+      } catch (e) {
+        alert("保存异常: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "保存并重连";
+      }
     }
   </script>
 </body>

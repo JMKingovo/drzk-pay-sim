@@ -123,11 +123,50 @@ export DRZK_DB_NAME=ykt
 
 ## 编译构建
 
-需预先安装 Rust 工具链（1.70+）：
+需预先安装 Rust 工具链（1.70+）。
+
+### 本机构建
+
 ```bash
 cargo build --release
 ```
 编译生成的可执行文件位于 `target/release/drzk-pay-sim`。
+
+### 一次构建三平台
+
+```bash
+./build-all.sh          # 产物归集到 dist/
+```
+
+| 产物 | 平台 | 说明 |
+|---|---|---|
+| `dist/drzk-pay-sim-macos-arm64` | macOS (Apple Silicon) | 930KB |
+| `dist/drzk-pay-sim-linux-x86_64` | Linux x86_64 | 静态 musl 链接，不依赖 glibc，任意发行版可直接运行 |
+| `dist/drzk-pay-sim-windows-x86_64.exe` | Windows x86_64 | 静态 CRT 链接，无需 MSVC 运行库，只依赖系统 DLL |
+
+交叉编译所需的工具（macOS 上一次装好即可）：
+
+```bash
+rustup target add x86_64-unknown-linux-musl x86_64-pc-windows-gnu
+brew install messense/macos-cross-toolchains/x86_64-unknown-linux-musl
+brew install mingw-w64
+```
+
+链接器配置见 `.cargo/config.toml`。
+
+### SSH 执行方式（三平台差异，重要）
+
+工具需要 SSH 登录车场服务器、在车场本机执行 MySQL 查询，才能拿到车场编号与支付 MQTT 凭证。
+不同平台可用的工具不同，程序按可用性自动降级，**启动时会打印实际使用的执行方式**：
+
+| 优先级 | 执行方式 | 适用平台 | 安装 |
+|---|---|---|---|
+| 1 | `sshpass` + `ssh` | macOS / Linux | `brew install sshpass` / `apt install sshpass` |
+| 2 | `plink`（PuTTY） | Windows | 装 PuTTY，把 `plink.exe` 放进 PATH；首次需手工连一次以接受主机指纹 |
+| 3 | 系统 `ssh` + 密钥认证 | 三平台均可 | 配好免密登录后连密码都不需要 |
+
+**Windows 上必须至少满足第 2 或第 3 条**，否则车场探测会失败：界面显示"车场信息探测失败"，
+且出于安全设计**不会下发任何支付**（宁可不发，也不发错车场）。
 
 ---
 

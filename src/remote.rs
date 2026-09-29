@@ -1,6 +1,6 @@
 use std::fs;
-use std::process::Command;
-use std::sync::RwLock;
+use std::process::{Command, Stdio};
+use std::sync::{OnceLock, RwLock};
 
 use crate::models::RemoteCredentials;
 
@@ -200,26 +200,112 @@ pub fn run_command(server_ip: &str, remote_cmd: &str) -> Result<String, String> 
     Err(last)
 }
 
+/// SSH 执行方式
+///
+/// Windows 上没有 sshpass，因此按可用性自动降级：sshpass → plink(PuTTY) → 系统 ssh(密钥认证)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transport {
+    Sshpass,
+    Plink,
+    PlainSsh,
+}
+
+static TRANSPORT: OnceLock<Transport> = OnceLock::new();
+
+pub fn transport() -> Transport {
+    *TRANSPORT.get_or_init(|| {
+        if cmd_available("sshpass") {
+            Transport::Sshpass
+        } else if cmd_available("plink") {
+            Transport::Plink
+        } else {
+            Transport::PlainSsh
+        }
+    })
+}
+
+pub fn transport_name() -> &'static str {
+    match transport() {
+        Transport::Sshpass => "sshpass + ssh",
+        Transport::Plink => "plink (PuTTY)",
+        Transport::PlainSsh => "ssh (密钥/agent 认证，不使用密码)",
+    }
+}
+
+/// 命令能否执行 (能 spawn 即视为存在，退出码无关)
+fn cmd_available(name: &str) -> bool {
+    Command::new(name)
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .is_ok()
+}
+
+/// 按当前执行方式拼出「程序 + 参数」
+fn build_command(cfg: &RemoteAccess, target: &str, remote_cmd: &str) -> (String, Vec<String>) {
+    match transport() {
+        Transport::Sshpass => (
+            "sshpass".to_string(),
+            vec![
+                "-p".into(),
+                cfg.ssh_pwd.clone(),
+                "ssh".into(),
+                "-p".into(),
+                cfg.ssh_port.clone(),
+                "-o".into(),
+                "StrictHostKeyChecking=no".into(),
+                "-o".into(),
+                "ConnectTimeout=3".into(),
+                target.into(),
+                remote_cmd.into(),
+            ],
+        ),
+        Transport::Plink => (
+            "plink".to_string(),
+            vec![
+                "-pw".into(),
+                cfg.ssh_pwd.clone(),
+                "-P".into(),
+                cfg.ssh_port.clone(),
+                "-batch".into(),
+                target.into(),
+                remote_cmd.into(),
+            ],
+        ),
+        Transport::PlainSsh => (
+            "ssh".to_string(),
+            vec![
+                "-p".into(),
+                cfg.ssh_port.clone(),
+                "-o".into(),
+                "StrictHostKeyChecking=no".into(),
+                "-o".into(),
+                "ConnectTimeout=3".into(),
+                "-o".into(),
+                "BatchMode=yes".into(),
+                target.into(),
+                remote_cmd.into(),
+            ],
+        ),
+    }
+}
+
 fn run_command_once(server_ip: &str, remote_cmd: &str) -> Result<String, Failure> {
     let cfg = current();
     let target = format!("{}@{}", cfg.ssh_user, server_ip);
+    let (program, args) = build_command(&cfg, &target, remote_cmd);
 
-    let output = Command::new("sshpass")
-        .args([
-            "-p",
-            &cfg.ssh_pwd,
-            "ssh",
-            "-p",
-            &cfg.ssh_port,
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=3",
-            &target,
-            remote_cmd,
-        ])
+    let output = Command::new(&program)
+        .args(&args)
         .output()
-        .map_err(|e| Failure::Ssh(format!("无法调用 sshpass (请确认已安装): {}", e)))?;
+        .map_err(|e| {
+            Failure::Ssh(format!(
+                "无法执行 {} ({}): 请安装 sshpass (macOS/Linux) 或 plink/PuTTY (Windows)，\
+                 或改用 SSH 密钥认证后仅用系统 ssh",
+                program, e
+            ))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

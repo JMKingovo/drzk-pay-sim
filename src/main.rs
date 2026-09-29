@@ -248,6 +248,7 @@ fn print_remote_access(server_ip: &str) {
     println!("  🔑 远程探测凭据:");
     println!("     SSH   : {}@{}:{}", r.ssh_user, if server_ip.is_empty() { "<待选择车场>" } else { server_ip }, r.ssh_port);
     println!("     MySQL : {}@本机 {}", r.db_user, r.db_name);
+    println!("     执行方式: {}", remote::transport_name());
 
     let mut builtin = Vec::new();
     if r.ssh_pwd_is_builtin() {

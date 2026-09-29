@@ -1,0 +1,21 @@
+# 交叉编译配置：在 macOS 上产出 Linux / Windows 版本
+#
+# 依赖（一次性安装）：
+#   rustup target add x86_64-unknown-linux-musl x86_64-pc-windows-gnu
+#   brew install messense/macos-cross-toolchains/x86_64-unknown-linux-musl
+#   brew install mingw-w64
+#
+# 产物：
+#   cargo build --release --target x86_64-unknown-linux-musl   -> target/x86_64-unknown-linux-musl/release/drzk-pay-sim
+#   cargo build --release --target x86_64-pc-windows-gnu       -> target/x86_64-pc-windows-gnu/release/drzk-pay-sim.exe
+
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-linux-musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+# 静态链接 C 运行库，Windows 上无需额外 DLL
+rustflags = ["-C", "target-feature=+crt-static"]

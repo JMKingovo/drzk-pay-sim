@@ -390,6 +390,7 @@
         <span>连接凭据:</span>
         <button type="button" class="btn-nav-cfg" onclick="openRemoteConfig('ssh')">SSH</button>
         <button type="button" class="btn-nav-cfg" onclick="openRemoteConfig('db')">数据库</button>
+        <button type="button" class="btn-nav-cfg" onclick="openRemoteConfig('park')">车场参数</button>
       </div>
 
       <div class="status-badge" style="margin-left: auto;">
@@ -445,7 +446,7 @@
     <div class="panel">
       <div class="panel-header">
         <h2>支付通道配置与场内工具</h2>
-        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">--</strong></span>
+        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">--</strong><span id="parkSourceTag" style="margin-left:4px; color:#b45309;"></span></span>
       </div>
 
       <!-- 1. 全局支付方式选择 -->
@@ -568,6 +569,33 @@
           </div>
         </div>
 
+        <div id="cfgParkGroup" style="display: none;">
+          <div class="cfg-row">
+            <label>车场编号 (park_no)</label>
+            <input type="text" id="cfgParkNo" class="text-input" placeholder="留空表示不修改，例如 H51810900057">
+          </div>
+          <div class="cfg-row">
+            <label>支付 MQTT 地址 (host:port)</label>
+            <input type="text" id="cfgMqttHost" class="text-input" placeholder="留空表示不修改，例如 a.drzk.cn:62181">
+          </div>
+          <div class="cfg-row">
+            <label>支付 MQTT 用户</label>
+            <input type="text" id="cfgMqttUser" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>支付 MQTT 密码</label>
+            <input type="password" id="cfgMqttPwd" class="text-input" placeholder="留空表示不修改">
+          </div>
+          <div class="cfg-row">
+            <label>岗亭号 (box_id)</label>
+            <input type="text" id="cfgBoxId" class="text-input" placeholder="留空表示不修改；不填则无法监听出口弹窗">
+          </div>
+          <div class="cfg-row">
+            <label>岗亭操作员 (loginName)</label>
+            <input type="text" id="cfgLoginName" class="text-input" placeholder="留空表示不修改">
+          </div>
+        </div>
+
         <div class="cfg-current" id="cfgCurrent">正在读取当前配置...</div>
       </div>
       <div class="modal-foot">
@@ -598,7 +626,7 @@
 
     async function switchServer() {
       const serverIp = document.getElementById("serverIp").value.trim();
-      if (!serverIp) return;
+      if (!serverIp) return false;
 
       const navStatus = document.getElementById("navWsStatus");
       const dot = document.getElementById("wsIndicator");
@@ -615,20 +643,24 @@
         if (res.code === 200 && res.data) {
           localStorage.setItem("last_server_ip", serverIp);
           document.getElementById("displayParkNo").innerText = fmtParkNo(res.data.park_no);
+          document.getElementById("parkSourceTag").innerText = fmtParkSource(res.data.park_config_source);
           navStatus.innerText = res.data.status_text || ("已连接 " + serverIp);
           dot.style.background = res.data.is_connected ? "#10b981" : "#f59e0b";
           // 已切换车场，旧车场查到的费用一律作废
           resetInnerFee("已切换车场，请重新查询费用");
           pollPopup(true);
+          return true;
         } else {
           const msg = res.msg || "未知错误";
           navStatus.innerText = "切换失败: " + msg.split("\n")[0];
           dot.style.background = "#ef4444";
           alert("连接车场失败\n" + msg);
+          return false;
         }
       } catch (e) {
         navStatus.innerText = "连接请求异常: " + e.message;
         dot.style.background = "#ef4444";
+        return false;
       }
     }
 
@@ -639,6 +671,7 @@
         if (res.code === 200 && res.data) {
           const cfg = res.data;
           document.getElementById("displayParkNo").innerText = fmtParkNo(cfg.park_no);
+          document.getElementById("parkSourceTag").innerText = fmtParkSource(cfg.park_config_source);
           document.getElementById("navWsStatus").innerText = cfg.status_text;
           const dot = document.getElementById("wsIndicator");
           dot.style.background = cfg.is_connected ? "#10b981" : "#ef4444";
@@ -962,15 +995,27 @@
       return v && v.trim() ? v : "未探测";
     }
 
-    // ============ 连接凭据配置（SSH / 数据库）============
+    // 车场参数的来源标记：手填值必须显式标出来，避免看起来像探测到的
+    function fmtParkSource(v) {
+      if (!v || v === "未配置" || v === "未接入") return "";
+      return "· " + v + (v === "手动配置" ? "（未经探测）" : "");
+    }
+
+    // ============ 连接配置弹窗（SSH / 数据库 / 车场参数）============
     let cfgMode = "ssh";
-    const CFG_FIELDS = ["cfgSshUser", "cfgSshPwd", "cfgSshPort", "cfgDbUser", "cfgDbPwd", "cfgDbName"];
+    const CFG_FIELDS = [
+      "cfgSshUser", "cfgSshPwd", "cfgSshPort",
+      "cfgDbUser", "cfgDbPwd", "cfgDbName",
+      "cfgParkNo", "cfgMqttHost", "cfgMqttUser", "cfgMqttPwd", "cfgBoxId", "cfgLoginName"
+    ];
 
     function openRemoteConfig(mode) {
       cfgMode = mode;
-      document.getElementById("cfgTitle").innerText = mode === "ssh" ? "SSH 登录凭据" : "数据库凭据";
+      document.getElementById("cfgTitle").innerText =
+        mode === "ssh" ? "SSH 登录凭据" : (mode === "db" ? "数据库凭据" : "车场参数（按车场 IP 保存）");
       document.getElementById("cfgSshGroup").style.display = mode === "ssh" ? "block" : "none";
       document.getElementById("cfgDbGroup").style.display = mode === "db" ? "block" : "none";
+      document.getElementById("cfgParkGroup").style.display = mode === "park" ? "block" : "none";
       document.getElementById("cfgMask").className = "modal-mask show";
       // 输入框一律留空：保持"留空=不修改"的语义，避免把回显值当成新值提交
       CFG_FIELDS.forEach(id => { document.getElementById(id).value = ""; });
@@ -985,6 +1030,32 @@
       const el = document.getElementById("cfgCurrent");
       el.innerText = "正在读取当前配置...";
       try {
+        if (cfgMode === "park") {
+          const ip = document.getElementById("serverIp").value.trim();
+          const res = await (await fetch("/api/park/config?server_ip=" + encodeURIComponent(ip))).json();
+          if (res.code !== 200 || !res.data) {
+            el.innerText = "读取车场参数失败: " + (res.msg || "未知错误");
+            return;
+          }
+          const c = res.data;
+          const eff = c.park_no || c.mqtt_host
+            ? `当前生效（来源: <strong>${escapeHtml(c.source)}</strong>）<br>` +
+              `车场编号 <strong>${escapeHtml(c.park_no || "—")}</strong> ｜ ` +
+              `MQTT <strong>${escapeHtml(c.mqtt_host || "—")}</strong> ｜ ` +
+              `用户 <strong>${escapeHtml(c.mqtt_user || "—")}</strong> ｜ 密码 ${c.mqtt_pwd_set ? "已设置" : "未设置"}<br>` +
+              `岗亭 <strong>${escapeHtml(c.box_id || "—")}</strong> / ${escapeHtml(c.login_name || "—")}`
+            : `当前车场 ${escapeHtml(c.server_ip || "—")} <strong>尚未接入</strong>（来源: ${escapeHtml(c.source)}）`;
+          const manual = c.manual_park_no || c.manual_mqtt_host
+            ? `已保存的手填值：编号 <strong>${escapeHtml(c.manual_park_no || "—")}</strong> ｜ ` +
+              `MQTT <strong>${escapeHtml(c.manual_mqtt_host || "—")}</strong> ｜ ` +
+              `用户 ${escapeHtml(c.manual_mqtt_user || "—")} ｜ 密码 ${c.manual_mqtt_pwd_set ? "已设置" : "未设置"} ｜ ` +
+              `岗亭 ${escapeHtml(c.manual_box_id || "—")}`
+            : "该车场还没有手填值。探测不通时，填好这里也能正常下发支付。";
+          el.innerHTML = `目标车场: <strong>${escapeHtml(c.server_ip || "(未填 IP)")}</strong><br>${eff}<br>${manual}` +
+            (c.saved_parks && c.saved_parks.length ? `<br>已配置过的车场：${escapeHtml(c.saved_parks.join("、"))}` : "");
+          return;
+        }
+
         const res = await (await fetch("/api/remote/config")).json();
         if (res.code === 200 && res.data) {
           const c = res.data;
@@ -1003,46 +1074,92 @@
     }
 
     async function saveRemoteConfig() {
-      const payload = {};
-      if (cfgMode === "ssh") {
-        payload.ssh_user = document.getElementById("cfgSshUser").value.trim();
-        payload.ssh_pwd = document.getElementById("cfgSshPwd").value;   // 密码不 trim，避免误删首尾空格
-        payload.ssh_port = document.getElementById("cfgSshPort").value.trim();
-      } else {
-        payload.db_user = document.getElementById("cfgDbUser").value.trim();
-        payload.db_pwd = document.getElementById("cfgDbPwd").value;
-        payload.db_name = document.getElementById("cfgDbName").value.trim();
-      }
-
-      const btn = document.getElementById("cfgSaveBtn");
-      btn.disabled = true;
-      btn.innerText = "保存中...";
       try {
-        const res = await (await fetch("/api/remote/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        })).json();
-
-        if (res.code !== 200) {
-          alert("保存失败: " + (res.msg || "未知错误"));
+        if (cfgMode === "park") {
+          const serverIp = document.getElementById("serverIp").value.trim();
+          if (!serverIp) {
+            alert("请先在顶部填写目标车场 IP，再配置该车场的参数。");
+            return;
+          }
+          const payload = {
+            server_ip: serverIp,
+            park_no: document.getElementById("cfgParkNo").value.trim(),
+            mqtt_host: document.getElementById("cfgMqttHost").value.trim(),
+            mqtt_user: document.getElementById("cfgMqttUser").value.trim(),
+            mqtt_pwd: document.getElementById("cfgMqttPwd").value,
+            box_id: document.getElementById("cfgBoxId").value.trim(),
+            login_name: document.getElementById("cfgLoginName").value.trim()
+          };
+          const btn = document.getElementById("cfgSaveBtn");
+          btn.disabled = true;
+          btn.innerText = "保存中...";
+          try {
+            const res = await (await fetch("/api/park/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            })).json();
+            if (res.code !== 200) {
+              alert("保存失败: " + (res.msg || "未知错误"));
+              return;
+            }
+            closeRemoteConfig();
+            // 用新参数重连：探测优先，探测不通会自动退回到刚保存的手填值
+            const ok = await switchServer();
+            await fetchServerConfig();
+            if (ok) {
+              alert("车场参数已保存，并已按新参数接入该车场。");
+            } else {
+              alert(res.msg + "\n（参数已保存，但当前未能接入该车场，请查看顶部状态）");
+            }
+          } finally {
+            btn.disabled = false;
+            btn.innerText = "保存并重连";
+          }
           return;
         }
 
-        closeRemoteConfig();
-
-        // 凭据变了就用新凭据重连一次当前车场，让改动立刻生效
-        const ip = document.getElementById("serverIp").value.trim();
-        if (ip) {
-          await switchServer();
+        const payload = {};
+        if (cfgMode === "ssh") {
+          payload.ssh_user = document.getElementById("cfgSshUser").value.trim();
+          payload.ssh_pwd = document.getElementById("cfgSshPwd").value;   // 密码不 trim，避免误删首尾空格
+          payload.ssh_port = document.getElementById("cfgSshPort").value.trim();
         } else {
-          alert(res.msg || "凭据已保存");
+          payload.db_user = document.getElementById("cfgDbUser").value.trim();
+          payload.db_pwd = document.getElementById("cfgDbPwd").value;
+          payload.db_name = document.getElementById("cfgDbName").value.trim();
+        }
+
+        const btn = document.getElementById("cfgSaveBtn");
+        btn.disabled = true;
+        btn.innerText = "保存中...";
+        try {
+          const res = await (await fetch("/api/remote/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          })).json();
+
+          if (res.code !== 200) {
+            alert("保存失败: " + (res.msg || "未知错误"));
+            return;
+          }
+
+          closeRemoteConfig();
+
+          // 凭据变了就用新凭据重连一次当前车场，让改动立刻生效
+          const ip = document.getElementById("serverIp").value.trim();
+          if (ip) {
+            await switchServer();
+          } else {
+            alert(res.msg || "凭据已保存");
+          }
+        } finally {
+          btn.disabled = false;
+          btn.innerText = "保存并重连";
         }
       } catch (e) {
         alert("保存异常: " + e.message);
-      } finally {
-        btn.disabled = false;
-        btn.innerText = "保存并重连";
       }
     }
   </script>

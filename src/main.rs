@@ -42,26 +42,8 @@ fn main() {
             }
         }
 
-        remote::set(remote::build_from_env_and_args(&args));
+        remote::init(&args);
         print_remote_access(&server_ip);
-
-        // 未指定车场 IP 时保持待命，由界面上的「连接车场」决定目标；
-        // 指定了 IP 就必须探测成功，否则明确报错，不猜测任何车场信息
-        let probed = if server_ip.is_empty() {
-            None
-        } else {
-            match ws_listener::probe_server_details(&server_ip) {
-                Ok(d) => {
-                    println!("  ✅ 车场探测成功: 编号 {}, 岗亭 {}, 操作员 {}", d.park_no, if d.box_id.is_empty() { "无" } else { &d.box_id }, d.login_name);
-                    Some(d)
-                }
-                Err(e) => {
-                    eprintln!("  ❌ 车场探测失败: {}", e);
-                    eprintln!("     支付下发已被禁用。可在界面顶部「SSH / 数据库」修改凭据后重新连接。");
-                    None
-                }
-            }
-        };
 
         let mut cfg = models::ServerConfig {
             server_ip: server_ip.clone(),
@@ -72,26 +54,70 @@ fn main() {
             status_text: if server_ip.is_empty() {
                 "尚未选择车场，请输入车场 IP 并点击「连接车场」".to_string()
             } else {
-                format!("车场 {} 信息探测失败，请修正 SSH/数据库配置后重新连接", server_ip)
+                format!("车场 {} 信息未配置，请点击「连接车场」", server_ip)
             },
             mqtt_host: String::new(),
             mqtt_user: String::new(),
             mqtt_pwd: String::new(),
+            park_config_source: "未配置".to_string(),
         };
 
-        if let Some(d) = probed {
-            let no_booth = d.box_id.is_empty();
-            cfg.park_no = d.park_no.clone();
-            cfg.box_id = d.box_id;
-            cfg.login_name = d.login_name;
-            cfg.mqtt_host = d.mqtt_host;
-            cfg.mqtt_user = d.mqtt_user;
-            cfg.mqtt_pwd = d.mqtt_pwd;
-            cfg.status_text = if no_booth {
-                format!("车场 {} 已探测 (编号 {})，但未取到岗亭信息，无法监听出口出车；可重新点击「连接车场」重试", server_ip, d.park_no)
-            } else {
-                format!("已探测 {}:8089 (车场: {})，正在连接通道...", server_ip, d.park_no)
-            };
+        // 优先自动探测(SSH+MySQL)；探测不通时退回该车场已保存的手填参数；
+        // 两者都没有就保持未配置并禁用支付，绝不凭空猜测
+        if !server_ip.is_empty() {
+            match ws_listener::probe_server_details(&server_ip) {
+                Ok(d) => {
+                    println!(
+                        "  ✅ 车场探测成功: 编号 {}, 岗亭 {}, 操作员 {}",
+                        d.park_no,
+                        if d.box_id.is_empty() { "无" } else { &d.box_id },
+                        d.login_name
+                    );
+                    if let Err(e) = remote::remember_probed(&server_ip, &d) {
+                        eprintln!("  ⚠️ 保存车场参数失败: {}", e);
+                    }
+
+                    let no_booth = d.box_id.is_empty();
+                    cfg.park_no = d.park_no.clone();
+                    cfg.box_id = d.box_id;
+                    cfg.login_name = d.login_name;
+                    cfg.mqtt_host = d.mqtt_host;
+                    cfg.mqtt_user = d.mqtt_user;
+                    cfg.mqtt_pwd = d.mqtt_pwd;
+                    cfg.park_config_source = "自动探测".to_string();
+                    cfg.status_text = if no_booth {
+                        format!("车场 {} 已探测 (编号 {})，但未取到岗亭信息，无法监听出口出车；可重新点击「连接车场」重试", server_ip, d.park_no)
+                    } else {
+                        format!("已探测 {}:8089 (车场: {})，正在连接通道...", server_ip, d.park_no)
+                    };
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️ 车场探测失败: {}", e);
+                    match remote::park_override(&server_ip) {
+                        Some(m) if m.can_pay() => {
+                            let d = m.to_details();
+                            println!("  → 改用该车场已保存的手填参数接入 (未经探测): 编号 {}", d.park_no);
+                            let no_booth = d.box_id.is_empty() || d.login_name.is_empty();
+                            cfg.park_no = d.park_no.clone();
+                            cfg.box_id = d.box_id;
+                            cfg.login_name = d.login_name;
+                            cfg.mqtt_host = d.mqtt_host;
+                            cfg.mqtt_user = d.mqtt_user;
+                            cfg.mqtt_pwd = d.mqtt_pwd;
+                            cfg.park_config_source = "手动配置".to_string();
+                            cfg.status_text = if no_booth {
+                                format!("已按手填参数接入 {} (车场 {})，但未填岗亭，无法监听出口出车", server_ip, d.park_no)
+                            } else {
+                                format!("已按手填参数接入 {} (车场 {}, 未经探测)，正在连接通道...", server_ip, d.park_no)
+                            };
+                        }
+                        _ => {
+                            eprintln!("     支付下发已被禁用。可在界面顶部「车场参数」填好该车场的车场编号与 MQTT 凭证，或修正 SSH/数据库凭据后重连。");
+                            cfg.status_text = format!("车场 {} 未配置，支付下发已禁用", server_ip);
+                        }
+                    }
+                }
+            }
         }
 
         let shared_config = Arc::new(Mutex::new(cfg));
@@ -120,7 +146,7 @@ fn main() {
     }
 
     // 否则作为 CLI 命令行工具直接下发
-    remote::set(remote::build_from_env_and_args(&args));
+    remote::init(&args);
 
     let mut car_no = String::new();
     let mut money = 10.0;
@@ -189,17 +215,33 @@ fn main() {
 
     print_remote_access(&server_ip);
 
-    let probed = match ws_listener::probe_server_details(&server_ip) {
-        Ok(d) => d,
+    // 探测优先；不通时用该车场已保存的手填参数，两者都没有则报错退出
+    let values = match ws_listener::probe_server_details(&server_ip) {
+        Ok(d) => {
+            if let Err(e) = remote::remember_probed(&server_ip, &d) {
+                eprintln!("  ⚠️ 保存车场参数失败: {}", e);
+            }
+            d
+        }
         Err(e) => {
-            eprintln!("【错误】车场探测失败: {}", e);
-            eprintln!("       请核对该车场的 SSH 与数据库凭据，可用 --ssh-user/--ssh-pwd/--ssh-port/--db-user/--db-pwd/--db-name 指定。");
-            std::process::exit(1);
+            eprintln!("  ⚠️ 车场探测失败: {}", e);
+            match remote::park_override(&server_ip) {
+                Some(m) if m.can_pay() => {
+                    println!("  → 改用该车场已保存的手填参数 (未经探测)");
+                    m.to_details()
+                }
+                _ => {
+                    eprintln!("【错误】该车场既探测不到、也没有手填参数。");
+                    eprintln!("       请在界面「车场参数」中填好车场编号与 MQTT 凭证，或指定 SSH/数据库凭据:");
+                    eprintln!("       --ssh-user/--ssh-pwd/--ssh-port/--db-user/--db-pwd/--db-name");
+                    std::process::exit(1);
+                }
+            }
         }
     };
 
-    let park_no = park_no_arg.unwrap_or_else(|| probed.park_no.clone());
-    let (mqtt_host, mqtt_user, mqtt_pwd) = (probed.mqtt_host, probed.mqtt_user, probed.mqtt_pwd);
+    let park_no = park_no_arg.unwrap_or_else(|| values.park_no.clone());
+    let (mqtt_host, mqtt_user, mqtt_pwd) = (values.mqtt_host, values.mqtt_user, values.mqtt_pwd);
 
     let req = PayRequest {
         car_no,

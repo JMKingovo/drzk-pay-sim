@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::{OnceLock, RwLock};
 
-use crate::models::RemoteCredentials;
+use crate::models::{ParkDetails, ParkOverride, RemoteCredentials};
 
 /// 车场服务器的 SSH 与 MySQL 访问凭据
 ///
@@ -32,6 +33,18 @@ impl Default for RemoteAccess {
 }
 
 impl RemoteAccess {
+    /// 转成"全部字段已填写"的凭据形式，用于落盘
+    fn to_credentials(&self) -> RemoteCredentials {
+        RemoteCredentials {
+            ssh_user: Some(self.ssh_user.clone()),
+            ssh_pwd: Some(self.ssh_pwd.clone()),
+            ssh_port: Some(self.ssh_port.clone()),
+            db_user: Some(self.db_user.clone()),
+            db_pwd: Some(self.db_pwd.clone()),
+            db_name: Some(self.db_name.clone()),
+        }
+    }
+
     /// 把界面上提交的字段覆盖到当前配置 (空值表示不修改该项)
     pub fn apply_update(&mut self, up: &RemoteCredentials) {
         overlay(self, up);
@@ -57,7 +70,14 @@ const ENV_KEYS: [(&str, &str); 6] = [
     ("--db-name", "DRZK_DB_NAME"),
 ];
 
-static REMOTE: RwLock<Option<RemoteAccess>> = RwLock::new(None);
+static REMOTE: RwLock<Option<Store>> = RwLock::new(None);
+
+/// 内存中的配置：SSH/数据库凭据 + 各车场的手填参数
+#[derive(Debug, Clone, Default)]
+struct Store {
+    remote: RemoteAccess,
+    parks: HashMap<String, ParkOverride>,
+}
 
 /// 读取当前生效凭据 (未初始化时返回内置默认值)
 pub fn current() -> RemoteAccess {
@@ -65,12 +85,84 @@ pub fn current() -> RemoteAccess {
         .read()
         .unwrap()
         .clone()
+        .map(|s| s.remote)
         .unwrap_or_else(RemoteAccess::default)
 }
 
 /// 覆盖当前生效凭据 (界面保存时调用)
 pub fn set(cfg: RemoteAccess) {
-    *REMOTE.write().unwrap() = Some(cfg);
+    let mut lock = REMOTE.write().unwrap();
+    let parks = lock.take().map(|s| s.parks).unwrap_or_default();
+    *lock = Some(Store { remote: cfg, parks });
+}
+
+/// 取某个车场已保存的手填参数
+pub fn park_override(server_ip: &str) -> Option<ParkOverride> {
+    REMOTE
+        .read()
+        .unwrap()
+        .as_ref()
+        .and_then(|s| s.parks.get(server_ip).cloned())
+}
+
+/// 已保存手填值的车场 IP 列表
+pub fn saved_parks() -> Vec<String> {
+    let mut v: Vec<String> = REMOTE
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.parks.keys().cloned().collect())
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// 合并保存某个车场的手填参数 (空值不覆盖已有值)
+pub fn update_park_override(server_ip: &str, up: &crate::models::ParkConfigUpdate) -> Result<ParkOverride, String> {
+    let mut lock = REMOTE.write().unwrap();
+    let store = lock.get_or_insert_with(|| Store {
+        remote: RemoteAccess::default(),
+        parks: HashMap::new(),
+    });
+
+    let entry = store.parks.entry(server_ip.to_string()).or_default();
+    let pairs: [(&Option<String>, &mut Option<String>); 6] = [
+        (&up.park_no, &mut entry.park_no),
+        (&up.mqtt_host, &mut entry.mqtt_host),
+        (&up.mqtt_user, &mut entry.mqtt_user),
+        (&up.mqtt_pwd, &mut entry.mqtt_pwd),
+        (&up.box_id, &mut entry.box_id),
+        (&up.login_name, &mut entry.login_name),
+    ];
+    for (src, dst) in pairs {
+        if let Some(v) = src {
+            if !v.trim().is_empty() {
+                *dst = Some(v.clone());
+            }
+        }
+    }
+
+    let merged = entry.clone();
+    let snapshot = store.clone();
+    drop(lock);
+
+    save_store(&snapshot)?;
+    Ok(merged)
+}
+
+/// 探测成功后把手填值更新为最新探测结果 (下次没有 SSH 时可直接使用)
+pub fn remember_probed(server_ip: &str, details: &ParkDetails) -> Result<(), String> {
+    let mut lock = REMOTE.write().unwrap();
+    let store = lock.get_or_insert_with(|| Store {
+        remote: RemoteAccess::default(),
+        parks: HashMap::new(),
+    });
+    let entry = store.parks.entry(server_ip.to_string()).or_default();
+    entry.merge_probed(details);
+    let snapshot = store.clone();
+    drop(lock);
+
+    save_store(&snapshot)
 }
 
 /// 配置文件路径：可由 DRZK_CONFIG_FILE 指定，默认放在用户目录下
@@ -86,19 +178,46 @@ pub fn config_path() -> std::path::PathBuf {
     std::path::PathBuf::from(home).join(".drzk-pay-sim.json")
 }
 
-/// 读取配置文件中的凭据 (文件不存在或格式错误时返回 None)
-pub fn load_file() -> Option<RemoteAccess> {
-    let text = fs::read_to_string(config_path()).ok()?;
-    let creds: RemoteCredentials = serde_json::from_str(&text).ok()?;
-    let mut cfg = RemoteAccess::default();
-    overlay(&mut cfg, &creds);
-    Some(cfg)
+/// 配置文件结构：SSH/数据库凭据扁平存放，另加 parks 表存放各车场手填参数
+///
+/// 旧版配置文件(只有扁平凭据、没有 parks)仍可正常读取。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ConfigFile {
+    #[serde(flatten)]
+    remote: RemoteCredentials,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    parks: HashMap<String, ParkOverride>,
 }
 
-/// 把当前凭据落盘保存 (文件权限收紧为 0600)
+/// 读取配置文件；文件不存在或格式错误时返回 None
+fn load_file() -> Option<Store> {
+    let text = fs::read_to_string(config_path()).ok()?;
+    let file: ConfigFile = serde_json::from_str(&text).ok()?;
+
+    let mut remote = RemoteAccess::default();
+    overlay(&mut remote, &file.remote);
+    Some(Store { remote, parks: file.parks })
+}
+
+/// 把当前凭据落盘保存 (文件权限收紧为 0600)，保留已存的车场手填值
 pub fn save_file(cfg: &RemoteAccess) -> Result<(), String> {
+    let parks = REMOTE
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.parks.clone())
+        .unwrap_or_default();
+
+    save_store(&Store { remote: cfg.clone(), parks })
+}
+
+fn save_store(store: &Store) -> Result<(), String> {
+    let file = ConfigFile {
+        remote: store.remote.to_credentials(),
+        parks: store.parks.clone(),
+    };
     let path = config_path();
-    let text = serde_json::to_string_pretty(cfg).map_err(|e| format!("序列化失败: {}", e))?;
+    let text = serde_json::to_string_pretty(&file).map_err(|e| format!("序列化失败: {}", e))?;
     fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {}", path.display(), e))?;
 
     #[cfg(unix)]
@@ -110,14 +229,14 @@ pub fn save_file(cfg: &RemoteAccess) -> Result<(), String> {
     Ok(())
 }
 
-/// 启动时的凭据加载：内置默认 → 配置文件 → 环境变量 → 命令行参数
-pub fn build_from_env_and_args(args: &[String]) -> RemoteAccess {
-    let mut cfg = load_file().unwrap_or_default();
+/// 启动时初始化配置：配置文件 → 环境变量 → 命令行参数 (后者覆盖前者)
+pub fn init(args: &[String]) {
+    let mut store = load_file().unwrap_or_default();
 
     for (_, env_key) in ENV_KEYS {
         if let Ok(val) = std::env::var(env_key) {
             if !val.is_empty() {
-                apply(&mut cfg, env_key, val);
+                apply(&mut store.remote, env_key, val);
             }
         }
     }
@@ -126,13 +245,13 @@ pub fn build_from_env_and_args(args: &[String]) -> RemoteAccess {
     while i < args.len() {
         if let Some((flag, _)) = ENV_KEYS.iter().find(|(flag, _)| *flag == args[i]) {
             if i + 1 < args.len() {
-                apply(&mut cfg, flag, args[i + 1].clone());
+                apply(&mut store.remote, flag, args[i + 1].clone());
             }
         }
         i += 1;
     }
 
-    cfg
+    *REMOTE.write().unwrap() = Some(store);
 }
 
 fn overlay(cfg: &mut RemoteAccess, up: &RemoteCredentials) {

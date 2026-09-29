@@ -83,6 +83,9 @@ pub struct ServerConfig {
     pub mqtt_host: String,
     pub mqtt_user: String,
     pub mqtt_pwd: String,
+    /// 车场参数来源: 自动探测 / 手动配置 / 未配置
+    #[serde(default)]
+    pub park_config_source: String,
 }
 
 /// 从目标车场服务器数据库探测到的真实信息
@@ -104,21 +107,141 @@ pub struct ParkDetails {
 }
 
 /// 界面上提交的 SSH / 数据库凭据 (字段留空或省略表示保持原值不变)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RemoteCredentials {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_user: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_pwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_port: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_user: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_pwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db_name: Option<String>,
 }
+
+/// 某个车场的手填参数 (按车场 IP 保存)
+///
+/// 车场编号与支付 MQTT 凭证本来只能通过 SSH+MySQL 从车场数据库探测；
+/// 存下这份手填值后，没有 SSH 的机器 (例如 Windows 单机跑 exe) 也能完整使用支付功能。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ParkOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park_no: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mqtt_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mqtt_user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mqtt_pwd: Option<String>,
+    /// 岗亭号 (缺失时仅影响出口弹窗监听与开闸联动，不影响支付)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_name: Option<String>,
+}
+
+impl ParkOverride {
+    /// 拼成车场信息 (缺项留空，由调用方判断够不够用)
+    pub fn to_details(&self) -> ParkDetails {
+        ParkDetails {
+            park_no: self.park_no.clone().unwrap_or_default(),
+            box_id: self.box_id.clone().unwrap_or_default(),
+            login_name: self.login_name.clone().unwrap_or_default(),
+            mqtt_host: self.mqtt_host.clone().unwrap_or_default(),
+            mqtt_user: self.mqtt_user.clone().unwrap_or_default(),
+            mqtt_pwd: self.mqtt_pwd.clone().unwrap_or_default(),
+        }
+    }
+
+    /// 是否足以支撑支付下发 (车场编号 + MQTT 地址)
+    pub fn can_pay(&self) -> bool {
+        self.park_no.as_deref().map_or(false, |v| !v.trim().is_empty())
+            && self.mqtt_host.as_deref().map_or(false, |v| !v.trim().is_empty())
+    }
+
+    /// 是否足以支撑出口弹窗监听
+    pub fn can_monitor(&self) -> bool {
+        self.box_id.as_deref().map_or(false, |v| !v.trim().is_empty())
+            && self.login_name.as_deref().map_or(false, |v| !v.trim().is_empty())
+    }
+
+    /// 把探测到的值合并进来 (探测值优先，作为最新的已知正确值存下)
+    pub fn merge_probed(&mut self, d: &ParkDetails) {
+        self.park_no = Some(d.park_no.clone());
+        self.mqtt_host = Some(d.mqtt_host.clone());
+        self.mqtt_user = Some(d.mqtt_user.clone());
+        self.mqtt_pwd = Some(d.mqtt_pwd.clone());
+        if !d.box_id.is_empty() {
+            self.box_id = Some(d.box_id.clone());
+        }
+        if !d.login_name.is_empty() {
+            self.login_name = Some(d.login_name.clone());
+        }
+    }
+
+    /// 是否有手填值与探测值不一致 (用于界面提示，避免静默以某一方为准)
+    pub fn conflicts_with(&self, d: &ParkDetails) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(v) = self.park_no.as_deref() {
+            if !v.is_empty() && v != d.park_no {
+                out.push(format!("车场编号 手填 {} / 探测 {}", v, d.park_no));
+            }
+        }
+        if let Some(v) = self.mqtt_host.as_deref() {
+            if !v.is_empty() && v != d.mqtt_host {
+                out.push(format!("MQTT 地址 手填 {} / 探测 {}", v, d.mqtt_host));
+            }
+        }
+        out
+    }
+}
+
+/// 界面上的车场参数视图 (密码只回显是否已设置)
+#[derive(Debug, Serialize)]
+pub struct ParkConfigView {
+    pub server_ip: String,
+    /// 当前生效值
+    pub park_no: String,
+    pub mqtt_host: String,
+    pub mqtt_user: String,
+    pub mqtt_pwd_set: bool,
+    pub box_id: String,
+    pub login_name: String,
+    /// 当前生效值的来源: 自动探测 / 手动配置 / 未配置
+    pub source: String,
+    /// 已保存的手填值 (用于回显对比)
+    pub manual_park_no: String,
+    pub manual_mqtt_host: String,
+    pub manual_mqtt_user: String,
+    pub manual_mqtt_pwd_set: bool,
+    pub manual_box_id: String,
+    pub manual_login_name: String,
+    /// 已保存手填值的车场列表
+    pub saved_parks: Vec<String>,
+}
+
+/// 界面提交的车场参数 (留空表示不修改)
+#[derive(Debug, Clone, Deserialize)]
+pub struct ParkConfigUpdate {
+    pub server_ip: String,
+    #[serde(default)]
+    pub park_no: Option<String>,
+    #[serde(default)]
+    pub mqtt_host: Option<String>,
+    #[serde(default)]
+    pub mqtt_user: Option<String>,
+    #[serde(default)]
+    pub mqtt_pwd: Option<String>,
+    #[serde(default)]
+    pub box_id: Option<String>,
+    #[serde(default)]
+    pub login_name: Option<String>,
+}
+
 
 /// 界面回显的当前凭据
 ///
@@ -162,5 +285,82 @@ pub fn get_pay_type_name(pay_type: i32) -> &'static str {
         21 => "ETC支付",
         57 => "聚合支付V6(随行付SXF)",
         _ => "第三方支付",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn details(park_no: &str, mqtt: &str, booth: &str) -> ParkDetails {
+        ParkDetails {
+            park_no: park_no.to_string(),
+            box_id: booth.to_string(),
+            login_name: "超级管理员".to_string(),
+            mqtt_host: mqtt.to_string(),
+            mqtt_user: "u".to_string(),
+            mqtt_pwd: "p".to_string(),
+        }
+    }
+
+    #[test]
+    fn 手填值够不够支付看编号与mqtt地址() {
+        let mut m = ParkOverride::default();
+        assert!(!m.can_pay(), "全空不该允许支付");
+        m.park_no = Some("H51810900057".into());
+        assert!(!m.can_pay(), "只有编号仍不够");
+        m.mqtt_host = Some("a.drzk.cn:62181".into());
+        assert!(m.can_pay(), "编号+地址即可支付");
+    }
+
+    #[test]
+    fn 手填值够不够监听看岗亭与操作员() {
+        let mut m = ParkOverride::default();
+        assert!(!m.can_monitor());
+        m.box_id = Some("1".into());
+        assert!(!m.can_monitor());
+        m.login_name = Some("超级管理员".into());
+        assert!(m.can_monitor());
+    }
+
+    #[test]
+    fn 探测结果会覆盖手填值但不抹掉岗亭() {
+        let mut m = ParkOverride::default();
+        m.park_no = Some("OLD".into());
+        m.box_id = Some("1".into());
+        m.login_name = Some("超级管理员".into());
+
+        // 探测没拿到岗亭时，不能把已有的岗亭信息清掉
+        let mut d = details("NEW", "newhost:1883", "");
+        d.login_name = String::new();
+        m.merge_probed(&d);
+
+        assert_eq!(m.park_no.as_deref(), Some("NEW"));
+        assert_eq!(m.mqtt_host.as_deref(), Some("newhost:1883"));
+        assert_eq!(m.box_id.as_deref(), Some("1"));
+        assert_eq!(m.login_name.as_deref(), Some("超级管理员"));
+    }
+
+    #[test]
+    fn 手填值与探测值不一致会被报出来() {
+        let mut m = ParkOverride::default();
+        m.park_no = Some("MANUAL".into());
+        m.mqtt_host = Some("a.drzk.cn:62181".into());
+
+        let same = details("MANUAL", "a.drzk.cn:62181", "1");
+        assert!(m.conflicts_with(&same).is_empty(), "一致时不该报冲突");
+
+        let diff = details("PROBED", "b.drzk.cn:62181", "1");
+        let c = m.conflicts_with(&diff);
+        assert_eq!(c.len(), 2, "编号与地址都不同，应报两条: {:?}", c);
+    }
+
+    #[test]
+    fn 手填值可拼成车场信息() {
+        let mut m = ParkOverride::default();
+        m.park_no = Some("P".into());
+        let d = m.to_details();
+        assert_eq!(d.park_no, "P");
+        assert_eq!(d.mqtt_host, "", "未填项应为空，交给调用方判断够不够用");
     }
 }

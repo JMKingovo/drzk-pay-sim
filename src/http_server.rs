@@ -5,7 +5,8 @@ use std::io::{Read, Write};
 use chrono::Local;
 
 use crate::models::{
-    ApiResponse, DetectedPopup, PayRequest, RemoteConfigView, RemoteCredentials, SwitchServerRequest,
+    ApiResponse, DetectedPopup, ParkConfigUpdate, ParkConfigView, ParkDetails, ParkOverride,
+    PayRequest, RemoteConfigView, RemoteCredentials, SwitchServerRequest,
 };
 use crate::remote;
 use crate::service::execute_payment;
@@ -24,6 +25,70 @@ fn remote_config_view() -> RemoteConfigView {
         ssh_pwd_set: !c.ssh_pwd.is_empty(),
         db_pwd_set: !c.db_pwd.is_empty(),
         config_file: remote::config_path().display().to_string(),
+    }
+}
+
+/// 从 URL 查询串里取参数 (自动做百分号解码)
+fn query_param(url: &str, key: &str) -> Option<String> {
+    let pos = url.find('?')?;
+    for pair in url[pos + 1..].split('&') {
+        let mut kv = pair.splitn(2, '=');
+        if kv.next() == Some(key) {
+            return Some(percent_decode(kv.next().unwrap_or("")));
+        }
+    }
+    None
+}
+
+/// 用手填参数拼出车场信息 (缺项留空，由调用方判断够不够用)
+fn details_from_override(m: &ParkOverride) -> ParkDetails {
+    m.to_details()
+}
+
+/// 组装车场参数视图 (密码只回显是否已设置)
+fn park_config_view(server_ip: &str, shared_config: &SharedConfig) -> ParkConfigView {
+    let (park_no, mqtt_host, mqtt_user, mqtt_pwd_set, box_id, login_name, source) = {
+        let c = shared_config.lock().unwrap();
+        if c.server_ip == server_ip {
+            (
+                c.park_no.clone(),
+                c.mqtt_host.clone(),
+                c.mqtt_user.clone(),
+                !c.mqtt_pwd.is_empty(),
+                c.box_id.clone(),
+                c.login_name.clone(),
+                if c.park_config_source.is_empty() { "未配置".to_string() } else { c.park_config_source.clone() },
+            )
+        } else {
+            (
+                String::new(),
+                String::new(),
+                String::new(),
+                false,
+                String::new(),
+                String::new(),
+                "未接入".to_string(),
+            )
+        }
+    };
+
+    let m = remote::park_override(server_ip).unwrap_or_default();
+    ParkConfigView {
+        server_ip: server_ip.to_string(),
+        park_no,
+        mqtt_host,
+        mqtt_user,
+        mqtt_pwd_set,
+        box_id,
+        login_name,
+        source,
+        manual_park_no: m.park_no.unwrap_or_default(),
+        manual_mqtt_host: m.mqtt_host.unwrap_or_default(),
+        manual_mqtt_user: m.mqtt_user.unwrap_or_default(),
+        manual_mqtt_pwd_set: m.mqtt_pwd.is_some(),
+        manual_box_id: m.box_id.unwrap_or_default(),
+        manual_login_name: m.login_name.unwrap_or_default(),
+        saved_parks: remote::saved_parks(),
     }
 }
 
@@ -86,24 +151,51 @@ pub fn start_http_server(
                 continue;
             }
 
-            println!("🔄 正在连接并探测目标车场 [{}]...", new_ip);
-            let probed = match probe_server_details(new_ip) {
-                Ok(d) => d,
-                Err(e) => {
-                    // 探测失败即拒绝切换，保持原车场配置不变，避免带着未知编号去下发支付
-                    eprintln!("  -> 车场探测失败: {}", e);
-                    send_json(request, 500, ApiResponse::<()> {
-                        code: 500,
-                        msg: format!(
-                            "无法探测车场 {} 的真实信息: {}\n如该车场凭据不同，请在界面顶部「SSH / 数据库」中修改后重新连接。",
-                            new_ip, e
-                        ),
-                        data: None,
-                    });
-                    continue;
+            println!("🔄 正在连接目标车场 [{}]...", new_ip);
+            let manual = remote::park_override(new_ip);
+
+            // 优先自动探测(SSH+MySQL)；探测不通时退回该车场已保存的手填参数，
+            // 这样没有 SSH 的机器(例如 Windows 单机跑 exe)也能接入，但绝不会凭空猜测任何值。
+            let (values, source, conflict) = match probe_server_details(new_ip) {
+                Ok(d) => {
+                    println!(
+                        "  ✅ 车场探测成功: 编号 {}, 岗亭 {}, 操作员 {}",
+                        d.park_no,
+                        if d.box_id.is_empty() { "无" } else { &d.box_id },
+                        d.login_name
+                    );
+                    // 记下这次探测结果，下次 SSH 不通时可直接用
+                    if let Err(e) = remote::remember_probed(new_ip, &d) {
+                        eprintln!("  ⚠️ 保存车场参数失败: {}", e);
+                    }
+                    let conflict = manual.as_ref().map(|m| m.conflicts_with(&d)).unwrap_or_default();
+                    (d, "自动探测", conflict)
+                }
+                Err(probe_err) => {
+                    eprintln!("  ⚠️ 车场探测失败: {}", probe_err);
+                    match manual {
+                        Some(m) if m.can_pay() => {
+                            println!(
+                                "  → 改用该车场已保存的手填参数接入 (未经探测)，出口监听{}可用",
+                                if m.can_monitor() { "" } else { "不" }
+                            );
+                            (details_from_override(&m), "手动配置", Vec::new())
+                        }
+                        _ => {
+                            send_json(request, 500, ApiResponse::<()> {
+                                code: 500,
+                                msg: format!(
+                                    "无法探测车场 {} 的真实信息: {}\n可在界面顶部「车场参数」中手工填写该车场的车场编号与 MQTT 凭证后重试。",
+                                    new_ip, probe_err
+                                ),
+                                data: None,
+                            });
+                            continue;
+                        }
+                    }
                 }
             };
-            let park_no = switch_req.park_no.unwrap_or_else(|| probed.park_no.clone());
+            let park_no = switch_req.park_no.unwrap_or_else(|| values.park_no.clone());
 
             // 更新全局配置
             let new_cfg = {
@@ -113,17 +205,20 @@ pub fn start_http_server(
                 let still_connected = same_ip && c.is_connected;
                 c.server_ip = new_ip.to_string();
                 c.park_no = park_no.clone();
-                c.box_id = probed.box_id.clone();
-                c.login_name = probed.login_name.clone();
+                c.box_id = values.box_id.clone();
+                c.login_name = values.login_name.clone();
                 c.is_connected = still_connected;
+                c.park_config_source = source.to_string();
                 c.status_text = if still_connected {
                     format!("已连接 {}:8089 (车场: {})", new_ip, park_no)
+                } else if source == "手动配置" {
+                    format!("已按手填参数接入 {} (车场 {}, 未经探测)，正在连接通道...", new_ip, park_no)
                 } else {
                     format!("已探测 {}:8089 (车场: {})，正在连接通道...", new_ip, park_no)
                 };
-                c.mqtt_host = probed.mqtt_host.clone();
-                c.mqtt_user = probed.mqtt_user.clone();
-                c.mqtt_pwd = probed.mqtt_pwd.clone();
+                c.mqtt_host = values.mqtt_host.clone();
+                c.mqtt_user = values.mqtt_user.clone();
+                c.mqtt_pwd = values.mqtt_pwd.clone();
                 c.clone()
             };
 
@@ -133,12 +228,22 @@ pub fn start_http_server(
                 *p = None;
             }
 
-            println!("  -> 车场编号探测: {}, 在线岗亭: {}, 操作员: {}", park_no, probed.box_id, probed.login_name);
-            send_json(request, 200, ApiResponse {
-                code: 200,
-                msg: format!("已成功切换至目标车场 {}", new_ip),
-                data: Some(new_cfg),
-            });
+            println!(
+                "  -> 参数来源: {}, 编号: {}, MQTT: {}, 岗亭: {}",
+                source, park_no, values.mqtt_host, values.box_id
+            );
+
+            let msg = format!(
+                "已成功接入车场 {}{}{}",
+                new_ip,
+                if source == "手动配置" { "（使用手填参数，未经 SSH 探测）" } else { "" },
+                if conflict.is_empty() {
+                    String::new()
+                } else {
+                    format!("；注意 手填值与探测值不一致: {}（当前以探测值为准）", conflict.join("；"))
+                }
+            );
+            send_json(request, 200, ApiResponse { code: 200, msg, data: Some(new_cfg) });
             continue;
         }
 
@@ -198,6 +303,84 @@ pub fn start_http_server(
         if url == "/api/pay/history" && method == "GET" {
             let history = { shared_history.lock().unwrap().clone() };
             send_json(request, 200, ApiResponse { code: 200, msg: "OK".into(), data: Some(history) });
+            continue;
+        }
+
+        // 2.4 车场参数 (车场编号 / MQTT 凭证 / 岗亭，按车场 IP 保存)
+        if url.starts_with("/api/park/config") && method == "GET" {
+            let ip = query_param(&url, "server_ip")
+                .unwrap_or_else(|| shared_config.lock().unwrap().server_ip.clone());
+            send_json(request, 200, ApiResponse { code: 200, msg: "OK".into(), data: Some(park_config_view(&ip, &shared_config)) });
+            continue;
+        }
+
+        if url.starts_with("/api/park/config") && method == "POST" {
+            let mut body_str = String::new();
+            if request.as_reader().read_to_string(&mut body_str).is_err() {
+                send_json(request, 400, ApiResponse::<()> { code: 400, msg: "读取请求失败".into(), data: None });
+                continue;
+            }
+
+            let up: ParkConfigUpdate = match serde_json::from_str(&body_str) {
+                Ok(u) => u,
+                Err(e) => {
+                    send_json(request, 400, ApiResponse::<()> { code: 400, msg: format!("JSON 解析失败: {}", e), data: None });
+                    continue;
+                }
+            };
+
+            let ip = up.server_ip.trim().to_string();
+            if ip.is_empty() {
+                send_json(request, 400, ApiResponse::<()> { code: 400, msg: "缺少 server_ip".into(), data: None });
+                continue;
+            }
+
+            let merged = match remote::update_park_override(&ip, &up) {
+                Ok(m) => m,
+                Err(e) => {
+                    send_json(request, 500, ApiResponse::<()> { code: 500, msg: format!("保存车场参数失败: {}", e), data: None });
+                    continue;
+                }
+            };
+
+            // 改的正好是当前车场时立即生效 (只覆盖填了的项，不动其它)
+            let mut applied_live = false;
+            {
+                let mut c = shared_config.lock().unwrap();
+                if c.server_ip == ip {
+                    if let Some(v) = merged.park_no.as_deref() {
+                        if !v.trim().is_empty() { c.park_no = v.trim().to_string(); }
+                    }
+                    if let Some(v) = merged.mqtt_host.as_deref() {
+                        if !v.trim().is_empty() { c.mqtt_host = v.trim().to_string(); }
+                    }
+                    if let Some(v) = merged.mqtt_user.as_deref() {
+                        if !v.trim().is_empty() { c.mqtt_user = v.trim().to_string(); }
+                    }
+                    if let Some(v) = merged.mqtt_pwd.as_deref() {
+                        if !v.trim().is_empty() { c.mqtt_pwd = v.to_string(); }
+                    }
+                    if let Some(v) = merged.box_id.as_deref() {
+                        if !v.trim().is_empty() { c.box_id = v.trim().to_string(); }
+                    }
+                    if let Some(v) = merged.login_name.as_deref() {
+                        if !v.trim().is_empty() { c.login_name = v.trim().to_string(); }
+                    }
+                    c.park_config_source = "手动配置".to_string();
+                    applied_live = true;
+                }
+            }
+
+            println!("🔧 已保存车场 [{}] 的手填参数，当前车场{}", ip, if applied_live { "已即时生效" } else { "非当前车场，切换后生效" });
+            send_json(request, 200, ApiResponse {
+                code: 200,
+                msg: if applied_live {
+                    "车场参数已保存并即时生效".to_string()
+                } else {
+                    "车场参数已保存，切换到该车场时生效".to_string()
+                },
+                data: Some(park_config_view(&ip, &shared_config)),
+            });
             continue;
         }
 

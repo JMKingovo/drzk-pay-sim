@@ -236,7 +236,7 @@ pub fn start_http_server(
                 c.status_text = if still_connected {
                     format!("已连接 {}:8089 (车场: {})", new_ip, park_no)
                 } else if source == "手动配置" {
-                    format!("已按手填参数接入 {} (车场 {}, 未经探测)，正在连接通道...", new_ip, park_no)
+                    format!("已按手填值接入 {} (车场 {})，正在连接通道...", new_ip, park_no)
                 } else {
                     format!("已探测 {}:8089 (车场: {})，正在连接通道...", new_ip, park_no)
                 };
@@ -260,7 +260,7 @@ pub fn start_http_server(
             let msg = format!(
                 "已成功接入车场 {}{}{}{}",
                 new_ip,
-                if source == "手动配置" { "（使用手填参数，未经 SSH 探测）" } else { "" },
+                if source == "手动配置" { "（用的是手填值：车场编号已与车场核对，MQTT 凭证未经探测）" } else { "" },
                 if conflict.is_empty() {
                     String::new()
                 } else {

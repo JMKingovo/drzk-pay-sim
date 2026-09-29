@@ -1008,10 +1008,12 @@
       return v && v.trim() ? v : "未探测";
     }
 
-    // 车场参数的来源标记：手填值必须显式标出来，避免看起来像探测到的
+    // 车场参数的来源标记：非探测来源必须显式标出来，避免看起来像车场确认过的
+    // （手填时车场编号已通过 HTTP 与车场核对，未核对的是 MQTT 凭证）
     function fmtParkSource(v) {
       if (!v || v === "未配置" || v === "未接入") return "";
-      return "· " + v + (v === "手动配置" ? "（未经探测）" : "");
+      if (v === "手动配置") return "· 手填值（MQTT 凭证未探测）";
+      return "· " + v;
     }
 
     // ============ 连接配置弹窗（SSH / 数据库 / 车场参数）============
@@ -1121,8 +1123,11 @@
             return;
           }
           const c = res.data;
+          const srcText = c.source === "手动配置"
+            ? "手动配置：车场编号已与车场核对，MQTT 凭证为手填"
+            : c.source;
           const eff = c.park_no || c.mqtt_host
-            ? `当前生效（来源: <strong>${escapeHtml(c.source)}</strong>）<br>` +
+            ? `当前生效（来源: <strong>${escapeHtml(srcText)}</strong>）<br>` +
               `车场编号 <strong>${escapeHtml(c.park_no || "—")}</strong> ｜ ` +
               `MQTT <strong>${escapeHtml(c.mqtt_host || "—")}</strong> ｜ ` +
               `用户 <strong>${escapeHtml(c.mqtt_user || "—")}</strong> ｜ 密码 ${c.mqtt_pwd_set ? "已设置" : "未设置"}<br>` +

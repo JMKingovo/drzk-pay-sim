@@ -102,7 +102,7 @@ fn main() {
                     match remote::park_override(&server_ip) {
                         Some(m) if m.can_pay() => {
                             let d = m.to_details();
-                            println!("  → 改用该车场已保存的手填参数接入 (未经探测): 编号 {}", d.park_no);
+                            println!("  → 探测不通，改用已保存的手填值接入: 编号 {}", d.park_no);
                             let no_booth = d.box_id.is_empty() || d.login_name.is_empty();
                             cfg.park_no = d.park_no.clone();
                             cfg.box_id = d.box_id;
@@ -114,7 +114,7 @@ fn main() {
                             cfg.status_text = if no_booth {
                                 format!("已按手填参数接入 {} (车场 {})，但未填岗亭，无法监听出口出车", server_ip, d.park_no)
                             } else {
-                                format!("已按手填参数接入 {} (车场 {}, 未经探测)，正在连接通道...", server_ip, d.park_no)
+                                format!("已按手填值接入 {} (车场 {})，正在连接通道...", server_ip, d.park_no)
                             };
                         }
                         _ => {
@@ -235,7 +235,7 @@ fn main() {
             eprintln!("  ⚠️ 车场探测失败: {}", e);
             match remote::park_override(&server_ip) {
                 Some(m) if m.can_pay() => {
-                    println!("  → 改用该车场已保存的手填参数 (未经探测)");
+                    println!("  → 探测不通，改用已保存的手填值");
                     m.to_details()
                 }
                 _ => {

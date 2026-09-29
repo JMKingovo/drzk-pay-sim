@@ -126,6 +126,17 @@ pub fn update_park_override(server_ip: &str, up: &crate::models::ParkConfigUpdat
     });
 
     let entry = store.parks.entry(server_ip.to_string()).or_default();
+
+    // 选择"自动跟随"时取消指定岗亭
+    if up.auto_booth == Some(true) {
+        entry.box_id = None;
+        entry.login_name = None;
+        entry.booth_pinned = Some(false);
+    } else if up.booth_pinned == Some(true) {
+        // 界面明确指定了岗亭
+        entry.booth_pinned = Some(true);
+    }
+
     let pairs: [(&Option<String>, &mut Option<String>); 6] = [
         (&up.park_no, &mut entry.park_no),
         (&up.mqtt_host, &mut entry.mqtt_host),

@@ -66,7 +66,7 @@ fn main() {
         // 两者都没有就保持未配置并禁用支付，绝不凭空猜测
         if !server_ip.is_empty() {
             match ws_listener::probe_server_details(&server_ip) {
-                Ok(d) => {
+                Ok(mut d) => {
                     println!(
                         "  ✅ 车场探测成功: 编号 {}, 岗亭 {}, 操作员 {}",
                         d.park_no,
@@ -75,6 +75,12 @@ fn main() {
                     );
                     if let Err(e) = remote::remember_probed(&server_ip, &d) {
                         eprintln!("  ⚠️ 保存车场参数失败: {}", e);
+                    }
+
+                    // 界面指定了岗亭就优先用它
+                    let pin_note = ws_listener::apply_pinned_booth(&mut d, remote::park_override(&server_ip).as_ref());
+                    if let Some(n) = &pin_note {
+                        println!("  ⚠️ 岗亭: {}", n);
                     }
 
                     let no_booth = d.box_id.is_empty();
@@ -125,6 +131,8 @@ fn main() {
         let shared_popup = Arc::new(Mutex::new(None));
         let shared_history: ws_listener::SharedPayHistory = Arc::new(Mutex::new(Vec::new()));
         start_ws_listener(shared_config.clone(), shared_popup.clone());
+        // 岗亭自动跟随：定期复查车场在线岗亭，变了就切过去（界面指定了岗亭则不切）
+        ws_listener::start_booth_watcher(shared_config.clone(), 30);
 
         let browser_url = format!("http://127.0.0.1:{}", port);
         if !no_open {

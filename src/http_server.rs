@@ -11,8 +11,8 @@ use crate::models::{
 use crate::remote;
 use crate::service::execute_payment;
 use crate::ws_listener::{
-    fetch_park_info, probe_server_details, query_booths, SharedConfig, SharedPayHistory,
-    SharedPopup, PAY_HISTORY_LIMIT,
+    apply_pinned_booth, fetch_park_info, probe_server_details, query_booths, SharedConfig,
+    SharedPayHistory, SharedPopup, PAY_HISTORY_LIMIT,
 };
 
 /// 组装回给界面的凭据视图 (不含密码明文)
@@ -69,6 +69,7 @@ fn park_config_view(server_ip: &str, shared_config: &SharedConfig) -> ParkConfig
     };
 
     let m = remote::park_override(server_ip).unwrap_or_default();
+    let booth_pinned = m.is_pinned();
     ParkConfigView {
         server_ip: server_ip.to_string(),
         park_no,
@@ -85,6 +86,7 @@ fn park_config_view(server_ip: &str, shared_config: &SharedConfig) -> ParkConfig
         manual_box_id: m.box_id.unwrap_or_default(),
         manual_login_name: m.login_name.unwrap_or_default(),
         saved_parks: remote::saved_parks(),
+        booth_pinned,
         booths: m.booths,
     }
 }
@@ -151,9 +153,12 @@ pub fn start_http_server(
             println!("🔄 正在连接目标车场 [{}]...", new_ip);
             let manual = remote::park_override(new_ip);
 
+            let mut conflict: Vec<String> = Vec::new();      // 探测值优先的项
+            let mut booth_notes: Vec<String> = Vec::new();   // 岗亭相关的说明（指定优先）
+
             // 优先自动探测(SSH+MySQL)；探测不通时退回该车场已保存的手填参数，
             // 这样没有 SSH 的机器(例如 Windows 单机跑 exe)也能接入，但绝不会凭空猜测任何值。
-            let (values, source, conflict) = match probe_server_details(new_ip) {
+            let (mut values, source) = match probe_server_details(new_ip) {
                 Ok(d) => {
                     println!(
                         "  ✅ 车场探测成功: 编号 {}, 岗亭 {}, 操作员 {}",
@@ -165,13 +170,12 @@ pub fn start_http_server(
                     if let Err(e) = remote::remember_probed(new_ip, &d) {
                         eprintln!("  ⚠️ 保存车场参数失败: {}", e);
                     }
-                    let conflict = manual.as_ref().map(|m| m.conflicts_with(&d)).unwrap_or_default();
-                    (d, "自动探测", conflict)
+                    conflict.extend(manual.as_ref().map(|m| m.conflicts_with(&d)).unwrap_or_default());
+                    (d, "自动探测")
                 }
                 Err(probe_err) => {
                     eprintln!("  ⚠️ 车场探测失败: {}", probe_err);
-                    let mut m = manual.unwrap_or_default();
-                    let mut conflict: Vec<String> = Vec::new();
+                    let mut m = manual.clone().unwrap_or_default();
 
                     // 车场自己的 HTTP 接口不校验身份，缺编号时先问它要（不需要 SSH）
                     match fetch_park_info(new_ip) {
@@ -196,7 +200,7 @@ pub fn start_http_server(
                             "  → 改用该车场的手填参数接入 (未经 SSH 探测)，出口监听{}可用",
                             if m.can_monitor() { "" } else { "不" }
                         );
-                        (m.to_details(), "手动配置", conflict)
+                        (m.to_details(), "手动配置")
                     } else {
                         send_json(request, 500, ApiResponse::<()> {
                             code: 500,
@@ -210,6 +214,11 @@ pub fn start_http_server(
                     }
                 }
             };
+            // 用户在「车场参数」里指定了岗亭就优先用它（尊重指定）
+            if let Some(note) = apply_pinned_booth(&mut values, manual.as_ref()) {
+                booth_notes.push(note);
+            }
+
             let park_no = switch_req.park_no.unwrap_or_else(|| values.park_no.clone());
 
             // 更新全局配置
@@ -249,13 +258,18 @@ pub fn start_http_server(
             );
 
             let msg = format!(
-                "已成功接入车场 {}{}{}",
+                "已成功接入车场 {}{}{}{}",
                 new_ip,
                 if source == "手动配置" { "（使用手填参数，未经 SSH 探测）" } else { "" },
                 if conflict.is_empty() {
                     String::new()
                 } else {
-                    format!("；注意 手填值与探测值不一致: {}（当前以探测值为准）", conflict.join("；"))
+                    format!("；注意 手填值与车场自报/探测不一致: {}（这部分以探测值为准）", conflict.join("；"))
+                },
+                if booth_notes.is_empty() {
+                    String::new()
+                } else {
+                    format!("；岗亭: {}", booth_notes.join("；"))
                 }
             );
             send_json(request, 200, ApiResponse { code: 200, msg, data: Some(new_cfg) });

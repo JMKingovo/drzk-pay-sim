@@ -165,18 +165,45 @@ pub struct ParkOverride {
     pub box_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
+    /// 岗亭是否为"用户在界面上指定"的
+    ///
+    /// box_id/login_name 也可能是旧版本由探测写下的，那种不算指定；
+    /// 只有这里为 true 时才是用户的明确选择，才禁止自动跟随。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booth_pinned: Option<bool>,
     /// 该车场已知的岗亭清单 (探测到后记下，供界面下拉选择；没有 SSH 时也能选)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub booths: Vec<Booth>,
 }
 
 impl ParkOverride {
+    /// 用户是否明确指定了岗亭 (只有这种情况才禁止自动跟随)
+    pub fn is_pinned(&self) -> bool {
+        self.booth_pinned.unwrap_or(false)
+            && self.box_id.as_deref().map_or(false, |v| !v.trim().is_empty())
+    }
+
     /// 拼成车场信息 (缺项留空，由调用方判断够不够用)
+    ///
+    /// 岗亭：优先用界面指定的；没指定就用已知清单里推荐的（清单按在线优先排序）。
+    /// 这样没有 SSH 时也能连上正确的岗亭。
     pub fn to_details(&self) -> ParkDetails {
+        let (box_id, login_name) = if self.is_pinned() {
+            (
+                self.box_id.clone().unwrap_or_default(),
+                self.login_name.clone().unwrap_or_default(),
+            )
+        } else {
+            match self.booths.first() {
+                Some(b) => (b.box_id.clone(), b.login_name.clone()),
+                None => (String::new(), String::new()),
+            }
+        };
+
         ParkDetails {
             park_no: self.park_no.clone().unwrap_or_default(),
-            box_id: self.box_id.clone().unwrap_or_default(),
-            login_name: self.login_name.clone().unwrap_or_default(),
+            box_id,
+            login_name,
             mqtt_host: self.mqtt_host.clone().unwrap_or_default(),
             mqtt_user: self.mqtt_user.clone().unwrap_or_default(),
             mqtt_pwd: self.mqtt_pwd.clone().unwrap_or_default(),
@@ -191,9 +218,12 @@ impl ParkOverride {
     }
 
     /// 是否足以支撑出口弹窗监听
+    ///
+    /// 指定了完整岗亭(号+操作员)，或已知清单里有可用岗亭，都算可用。
     pub fn can_monitor(&self) -> bool {
-        self.box_id.as_deref().map_or(false, |v| !v.trim().is_empty())
-            && self.login_name.as_deref().map_or(false, |v| !v.trim().is_empty())
+        let pinned = self.is_pinned()
+            && self.login_name.as_deref().map_or(false, |v| !v.trim().is_empty());
+        pinned || self.booths.first().is_some()
     }
 
     /// 把探测到的值合并进来 (探测值优先，作为最新的已知正确值存下)
@@ -202,13 +232,10 @@ impl ParkOverride {
         self.mqtt_host = Some(d.mqtt_host.clone());
         self.mqtt_user = Some(d.mqtt_user.clone());
         self.mqtt_pwd = Some(d.mqtt_pwd.clone());
-        if !d.box_id.is_empty() {
-            self.box_id = Some(d.box_id.clone());
-        }
-        if !d.login_name.is_empty() {
-            self.login_name = Some(d.login_name.clone());
-        }
-        // 岗亭清单只在探测到内容时更新，避免把已知清单清空
+        // 注意：这里不动 box_id/login_name —— 它们代表"用户在界面上指定的岗亭"，
+        // 不能被探测结果覆盖，否则指定就失效了。探测到的岗亭进 booths 清单，
+        // 未指定时由清单里推荐的（在线优先）承担连接目标。
+        // 岗亭清单同样只在探测到内容时更新，避免把已知清单清空
         if !d.booths.is_empty() {
             self.booths = d.booths.clone();
         }
@@ -253,6 +280,8 @@ pub struct ParkConfigView {
     pub manual_login_name: String,
     /// 已保存手填值的车场列表
     pub saved_parks: Vec<String>,
+    /// 当前岗亭是否为用户指定
+    pub booth_pinned: bool,
     /// 该车场已知的岗亭清单 (供下拉选择)
     pub booths: Vec<Booth>,
 }
@@ -273,6 +302,12 @@ pub struct ParkConfigUpdate {
     pub box_id: Option<String>,
     #[serde(default)]
     pub login_name: Option<String>,
+    /// true = 取消指定岗亭，改为自动跟随车场在线岗亭
+    #[serde(default)]
+    pub auto_booth: Option<bool>,
+    /// true = 本次提交的岗亭是"指定"（配合 box_id/login_name）
+    #[serde(default)]
+    pub booth_pinned: Option<bool>,
 }
 
 
@@ -354,7 +389,47 @@ mod tests {
         m.box_id = Some("1".into());
         assert!(!m.can_monitor());
         m.login_name = Some("超级管理员".into());
-        assert!(m.can_monitor());
+        assert!(!m.can_monitor(), "旧数据里可能残留岗亭值，但没有指定标记就不算指定");
+        m.booth_pinned = Some(true);
+        assert!(m.can_monitor(), "明确指定后才算可用");
+    }
+
+    #[test]
+    fn 旧配置里的岗亭值不会被当成指定() {
+        // 模拟旧版本探测写下的值：有 box_id/login_name，没有 booth_pinned
+        let mut m = ParkOverride::default();
+        m.box_id = Some("1".into());
+        m.login_name = Some("超级管理员".into());
+        assert!(!m.is_pinned(), "旧数据不该被当成用户指定，否则自动跟随会失效");
+
+        m.booths = vec![Booth { box_id: "9".into(), login_name: "新岗".into(), online: true }];
+        assert_eq!(m.to_details().box_id, "9", "未指定时应采用清单里推荐的岗亭");
+    }
+
+    #[test]
+    fn 探测不会覆盖用户指定的岗亭() {
+        let mut m = ParkOverride::default();
+        m.box_id = Some("2".into());
+        m.login_name = Some("操作员B".into());
+
+        m.merge_probed(&details("P", "h:1", "1"));
+
+        assert_eq!(m.box_id.as_deref(), Some("2"), "指定岗亭被探测结果覆盖了");
+        assert_eq!(m.login_name.as_deref(), Some("操作员B"));
+        assert_eq!(m.booths.len(), 0, "探测没给清单时不该凭空造");
+    }
+
+    #[test]
+    fn 未指定岗亭时用清单里推荐的() {
+        let mut m = ParkOverride::default();
+        m.booths = vec![
+            Booth { box_id: "1".into(), login_name: "在线岗".into(), online: true },
+            Booth { box_id: "2".into(), login_name: "离线岗".into(), online: false },
+        ];
+        assert!(m.can_monitor(), "有清单就该能监听");
+        let d = m.to_details();
+        assert_eq!(d.box_id, "1", "应取清单里在线优先的第一个");
+        assert_eq!(d.login_name, "在线岗");
     }
 
     #[test]

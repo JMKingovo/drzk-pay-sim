@@ -1025,6 +1025,12 @@
 
     // 选中岗亭后自动填好岗亭号与操作员（也可手改）
     function onBoothSelect(sel) {
+      if (sel.value === "auto") {
+        // 清空 = 取消指定，改为自动跟随
+        document.getElementById("cfgBoxId").value = "";
+        document.getElementById("cfgLoginName").value = "";
+        return;
+      }
       const b = cfgBooths[Number(sel.value)];
       if (!b) return;
       document.getElementById("cfgBoxId").value = b.box_id;
@@ -1049,9 +1055,11 @@
           return;
         }
         cfgBooths = res.data || [];
-        sel.innerHTML = '<option value="">（请选择岗亭）</option>' + cfgBooths.map((b, i) =>
-          `<option value="${i}">${escapeHtml(b.box_id)} · ${escapeHtml(b.login_name)}${b.online ? "（在线）" : "（离线）"}</option>`
-        ).join("");
+        sel.innerHTML = '<option value="">（不修改）</option>' +
+          '<option value="auto">自动跟随车场在线岗亭</option>' +
+          cfgBooths.map((b, i) =>
+            `<option value="${i}">指定 ${escapeHtml(b.box_id)} · ${escapeHtml(b.login_name)}${b.online ? "（在线）" : "（离线）"}</option>`
+          ).join("");
         if (old) sel.value = old;
         if (refresh) console.log(res.msg);
       } catch (e) {
@@ -1126,7 +1134,10 @@
               `用户 ${escapeHtml(c.manual_mqtt_user || "—")} ｜ 密码 ${c.manual_mqtt_pwd_set ? "已设置" : "未设置"} ｜ ` +
               `岗亭 ${escapeHtml(c.manual_box_id || "—")}`
             : "该车场还没有手填值。探测不通时，填好这里也能正常下发支付。";
-          el.innerHTML = `目标车场: <strong>${escapeHtml(c.server_ip || "(未填 IP)")}</strong><br>${eff}<br>${manual}` +
+          const boothMode = c.booth_pinned
+            ? `岗亭: 已指定 <strong>${escapeHtml(c.manual_box_id)} / ${escapeHtml(c.manual_login_name || "—")}</strong>（车场换岗亭不会自动跟随）`
+            : "岗亭: <strong>自动跟随</strong>（车场换岗亭会自动切过去）";
+          el.innerHTML = `目标车场: <strong>${escapeHtml(c.server_ip || "(未填 IP)")}</strong><br>${boothMode}<br>${eff}<br>${manual}` +
             (c.booths && c.booths.length ? `<br>已知岗亭 ${c.booths.length} 个，可在上面下拉选择` : "<br>暂无岗亭清单，可点「重新读取岗亭列表」") +
             (c.saved_parks && c.saved_parks.length ? `<br>已配置过的车场：${escapeHtml(c.saved_parks.join("、"))}` : "");
           return;
@@ -1157,6 +1168,7 @@
             alert("请先在顶部填写目标车场 IP，再配置该车场的参数。");
             return;
           }
+          const boothSel = document.getElementById("cfgBoothSelect").value;
           const payload = {
             server_ip: serverIp,
             park_no: document.getElementById("cfgParkNo").value.trim(),
@@ -1166,6 +1178,13 @@
             box_id: document.getElementById("cfgBoxId").value.trim(),
             login_name: document.getElementById("cfgLoginName").value.trim()
           };
+          if (boothSel === "auto") {
+            payload.auto_booth = true;   // 取消指定，改为自动跟随
+            payload.box_id = "";
+            payload.login_name = "";
+          } else if (boothSel !== "") {
+            payload.booth_pinned = true; // 明确指定
+          }
           const btn = document.getElementById("cfgSaveBtn");
           btn.disabled = true;
           btn.innerText = "保存中...";

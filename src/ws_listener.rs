@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use chrono::Local;
 
-use crate::models::{Booth, DetectedPopup, ParkDetails, ParkHttpInfo, PayResultData, ServerConfig};
+use crate::models::{
+    Booth, DetectedPopup, ParkDetails, ParkHttpInfo, ParkOverride, PayResultData, ServerConfig,
+};
 use crate::remote;
 
 pub type SharedPopup = Arc<Mutex<Option<DetectedPopup>>>;
@@ -196,6 +198,113 @@ pub fn query_booths(server_ip: &str) -> Result<Vec<Booth>, String> {
         .collect())
 }
 
+/// 应用"用户指定岗亭"的偏好
+///
+/// 指定了就优先用指定的（尊重用户选择）；指定的岗亭已不在车场岗亭列表中时回落到
+/// 车场推荐的那个，并把说明文字返回给调用方展示。
+pub fn apply_pinned_booth(values: &mut ParkDetails, manual: Option<&ParkOverride>) -> Option<String> {
+    let m = manual.filter(|m| m.is_pinned())?;
+    let pinned_box = m.box_id.clone().filter(|v| !v.trim().is_empty())?;
+    let pinned_user = m.login_name.clone().unwrap_or_default();
+
+    if values.booths.iter().any(|b| b.box_id == pinned_box) {
+        let online = values
+            .booths
+            .iter()
+            .find(|b| b.box_id == pinned_box)
+            .map(|b| b.online)
+            .unwrap_or(false);
+        let auto_box = values.booths.first().map(|b| b.box_id.clone()).unwrap_or_default();
+        values.box_id = pinned_box.clone();
+        values.login_name = pinned_user;
+        println!("  → 按界面指定的岗亭接入: {} / {}", values.box_id, values.login_name);
+
+        if auto_box != pinned_box {
+            return Some(format!(
+                "已按指定使用 {}，车场在线的是 {}{}",
+                pinned_box,
+                auto_box,
+                if online { "" } else { "（指定的岗亭当前离线）" }
+            ));
+        }
+        None
+    } else if values.booths.is_empty() {
+        // 拿不到岗亭列表时仍按指定值用
+        values.box_id = pinned_box.clone();
+        values.login_name = pinned_user;
+        println!("  → 未取到岗亭列表，仍按界面指定的岗亭 {} 接入", values.box_id);
+        None
+    } else {
+        let note = format!(
+            "指定的 {} 不在车场岗亭列表中，已改用 {}",
+            pinned_box, values.box_id
+        );
+        Some(note)
+    }
+}
+
+/// 岗亭自动跟随：车场哪个岗亭在线就连哪个
+///
+/// 车场侧的岗亭会切换（操作员换机、岗亭心跳转移），这里定期复查，
+/// 发现"在线岗亭"与当前连接的不一致就切过去，避免一直连着一个已经没人的岗亭。
+/// 用户在「车场参数」里指定了岗亭时不做自动切换（尊重指定）。
+pub fn start_booth_watcher(cfg: SharedConfig, interval_secs: u64) {
+    std::thread::spawn(move || {
+        // 读取失败时不刷屏，但隔一段时间要报一次，否则现场无法判断"跟随"到底有没有在工作
+        let mut fail_count: u32 = 0;
+        loop {
+        std::thread::sleep(Duration::from_secs(interval_secs));
+
+        let (ip, park_no, cur_box, cur_user) = {
+            let c = cfg.lock().unwrap();
+            (
+                c.server_ip.clone(),
+                c.park_no.clone(),
+                c.box_id.clone(),
+                c.login_name.clone(),
+            )
+        };
+        if ip.is_empty() || park_no.is_empty() {
+            continue;
+        }
+
+        // 指定了岗亭就不自动切换
+        if let Some(m) = remote::park_override(&ip) {
+            if m.box_id.as_deref().map_or(false, |v| !v.trim().is_empty()) {
+                continue;
+            }
+        }
+
+        match query_booths(&ip) {
+            Ok(booths) => {
+                fail_count = 0;
+                if let Some(best) = booths.first() {
+                    if best.box_id != cur_box || best.login_name != cur_user {
+                        println!(
+                            "🔄 车场 [{}] 的在线岗亭已变为 {} / {}，切换通道连接（原 {} / {}）",
+                            ip, best.box_id, best.login_name, cur_box, cur_user
+                        );
+                        let mut c = cfg.lock().unwrap();
+                        c.box_id = best.box_id.clone();
+                        c.login_name = best.login_name.clone();
+                    }
+                }
+            }
+            Err(e) => {
+                // SSH 偶发失败很常见，不刷屏；但第一次和每隔 20 次报一条，便于现场判断
+                fail_count += 1;
+                if fail_count == 1 || fail_count % 20 == 0 {
+                    println!(
+                        "  ⚠️ 岗亭自动跟随暂时读不到车场岗亭列表 (已连续失败 {} 次): {}",
+                        fail_count, e
+                    );
+                }
+            }
+        }
+        }
+    });
+}
+
 /// 通过 HTTP 直接向车场服务要车场信息 (POST /box/push/getParkInfo)
 ///
 /// 实测该接口不校验身份，因此**不需要 SSH** 就能拿到车场编号，
@@ -295,14 +404,24 @@ fn connect_ws(addr: &str, path: &str) -> Result<TcpStream, String> {
 }
 
 fn listen_frames(stream: &mut TcpStream, cfg: &SharedConfig, shared_popup: &SharedPopup) {
-    let current_ip = { cfg.lock().unwrap().server_ip.clone() };
+    let (current_ip, current_box, current_user) = {
+        let c = cfg.lock().unwrap();
+        (c.server_ip.clone(), c.box_id.clone(), c.login_name.clone())
+    };
 
     loop {
-        // 如果目标 IP 已经改变，立即断开当前 stream 退出重连
+        // 目标 IP 或岗亭发生变化时，立即断开当前 stream 退出重连
         {
-            let now_ip = cfg.lock().unwrap().server_ip.clone();
-            if now_ip != current_ip {
+            let c = cfg.lock().unwrap();
+            if c.server_ip != current_ip {
                 println!("🔌 目标 IP 已变更，断开旧连接 [{}]", current_ip);
+                break;
+            }
+            if c.box_id != current_box || c.login_name != current_user {
+                println!(
+                    "🔌 岗亭已切换 ({} / {} → {} / {})，重连通道",
+                    current_box, current_user, c.box_id, c.login_name
+                );
                 break;
             }
         }

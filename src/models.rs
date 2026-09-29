@@ -104,6 +104,29 @@ pub struct ParkDetails {
     pub mqtt_host: String,
     pub mqtt_user: String,
     pub mqtt_pwd: String,
+    /// 该车场已知的岗亭清单 (供界面下拉选择)
+    #[serde(default)]
+    pub booths: Vec<Booth>,
+}
+
+/// 车场的一个岗亭
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Booth {
+    pub box_id: String,
+    pub login_name: String,
+    #[serde(default)]
+    pub online: bool,
+}
+
+/// 通过 HTTP 从车场服务直接读到的车场信息 (无需 SSH)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParkHttpInfo {
+    /// 车场编号 (接口里的 projectNo)，就是支付报文的投递主题所用的编号
+    pub park_no: String,
+    /// 车场名称 (接口里的 projectName)
+    pub project_name: String,
+    /// 车场开启的支付方式编码，如 "1,2,34,57"
+    pub payment: String,
 }
 
 /// 界面上提交的 SSH / 数据库凭据 (字段留空或省略表示保持原值不变)
@@ -142,6 +165,9 @@ pub struct ParkOverride {
     pub box_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
+    /// 该车场已知的岗亭清单 (探测到后记下，供界面下拉选择；没有 SSH 时也能选)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub booths: Vec<Booth>,
 }
 
 impl ParkOverride {
@@ -154,6 +180,7 @@ impl ParkOverride {
             mqtt_host: self.mqtt_host.clone().unwrap_or_default(),
             mqtt_user: self.mqtt_user.clone().unwrap_or_default(),
             mqtt_pwd: self.mqtt_pwd.clone().unwrap_or_default(),
+            booths: self.booths.clone(),
         }
     }
 
@@ -180,6 +207,10 @@ impl ParkOverride {
         }
         if !d.login_name.is_empty() {
             self.login_name = Some(d.login_name.clone());
+        }
+        // 岗亭清单只在探测到内容时更新，避免把已知清单清空
+        if !d.booths.is_empty() {
+            self.booths = d.booths.clone();
         }
     }
 
@@ -222,6 +253,8 @@ pub struct ParkConfigView {
     pub manual_login_name: String,
     /// 已保存手填值的车场列表
     pub saved_parks: Vec<String>,
+    /// 该车场已知的岗亭清单 (供下拉选择)
+    pub booths: Vec<Booth>,
 }
 
 /// 界面提交的车场参数 (留空表示不修改)
@@ -300,6 +333,7 @@ mod tests {
             mqtt_host: mqtt.to_string(),
             mqtt_user: "u".to_string(),
             mqtt_pwd: "p".to_string(),
+            booths: Vec::new(),
         }
     }
 

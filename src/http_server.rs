@@ -5,13 +5,14 @@ use std::io::{Read, Write};
 use chrono::Local;
 
 use crate::models::{
-    ApiResponse, DetectedPopup, ParkConfigUpdate, ParkConfigView, ParkDetails, ParkOverride,
-    PayRequest, RemoteConfigView, RemoteCredentials, SwitchServerRequest,
+    ApiResponse, DetectedPopup, ParkConfigUpdate, ParkConfigView, PayRequest, RemoteConfigView,
+    RemoteCredentials, SwitchServerRequest,
 };
 use crate::remote;
 use crate::service::execute_payment;
 use crate::ws_listener::{
-    probe_server_details, SharedConfig, SharedPayHistory, SharedPopup, PAY_HISTORY_LIMIT,
+    fetch_park_info, probe_server_details, query_booths, SharedConfig, SharedPayHistory,
+    SharedPopup, PAY_HISTORY_LIMIT,
 };
 
 /// 组装回给界面的凭据视图 (不含密码明文)
@@ -38,11 +39,6 @@ fn query_param(url: &str, key: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// 用手填参数拼出车场信息 (缺项留空，由调用方判断够不够用)
-fn details_from_override(m: &ParkOverride) -> ParkDetails {
-    m.to_details()
 }
 
 /// 组装车场参数视图 (密码只回显是否已设置)
@@ -89,6 +85,7 @@ fn park_config_view(server_ip: &str, shared_config: &SharedConfig) -> ParkConfig
         manual_box_id: m.box_id.unwrap_or_default(),
         manual_login_name: m.login_name.unwrap_or_default(),
         saved_parks: remote::saved_parks(),
+        booths: m.booths,
     }
 }
 
@@ -173,25 +170,43 @@ pub fn start_http_server(
                 }
                 Err(probe_err) => {
                     eprintln!("  ⚠️ 车场探测失败: {}", probe_err);
-                    match manual {
-                        Some(m) if m.can_pay() => {
-                            println!(
-                                "  → 改用该车场已保存的手填参数接入 (未经探测)，出口监听{}可用",
-                                if m.can_monitor() { "" } else { "不" }
-                            );
-                            (details_from_override(&m), "手动配置", Vec::new())
+                    let mut m = manual.unwrap_or_default();
+                    let mut conflict: Vec<String> = Vec::new();
+
+                    // 车场自己的 HTTP 接口不校验身份，缺编号时先问它要（不需要 SSH）
+                    match fetch_park_info(new_ip) {
+                        Ok(info) => {
+                            println!("  → 车场 HTTP 自报: 编号 {} ({})", info.park_no, info.project_name);
+                            // 自报编号是车场自己给的，权威性高于手填值；不一致时以自报值为准并告警
+                            if let Some(filled) = m.park_no.as_deref() {
+                                if !filled.trim().is_empty() && filled != info.park_no {
+                                    conflict.push(format!(
+                                        "车场编号 手填 {} / 车场自报 {}",
+                                        filled, info.park_no
+                                    ));
+                                }
+                            }
+                            m.park_no = Some(info.park_no.clone());
                         }
-                        _ => {
-                            send_json(request, 500, ApiResponse::<()> {
-                                code: 500,
-                                msg: format!(
-                                    "无法探测车场 {} 的真实信息: {}\n可在界面顶部「车场参数」中手工填写该车场的车场编号与 MQTT 凭证后重试。",
-                                    new_ip, probe_err
-                                ),
-                                data: None,
-                            });
-                            continue;
-                        }
+                        Err(e) => eprintln!("  ⚠️ 车场 HTTP 自报信息也取不到: {}", e),
+                    }
+
+                    if m.can_pay() {
+                        println!(
+                            "  → 改用该车场的手填参数接入 (未经 SSH 探测)，出口监听{}可用",
+                            if m.can_monitor() { "" } else { "不" }
+                        );
+                        (m.to_details(), "手动配置", conflict)
+                    } else {
+                        send_json(request, 500, ApiResponse::<()> {
+                            code: 500,
+                            msg: format!(
+                                "无法探测车场 {} 的真实信息: {}\n还缺支付 MQTT 凭证，请在界面顶部「车场参数」中填写该车场的 MQTT 地址/用户/密码后重试。",
+                                new_ip, probe_err
+                            ),
+                            data: None,
+                        });
+                        continue;
                     }
                 }
             };
@@ -381,6 +396,62 @@ pub fn start_http_server(
                 },
                 data: Some(park_config_view(&ip, &shared_config)),
             });
+            continue;
+        }
+
+        // 2.5 车场 HTTP 自报信息 (不需要 SSH，用于自动填充/核对该车场编号)
+        if url.starts_with("/api/park/info") && method == "GET" {
+            let ip = query_param(&url, "server_ip").unwrap_or_default();
+            if ip.trim().is_empty() {
+                send_json(request, 400, ApiResponse::<()> { code: 400, msg: "缺少 server_ip".into(), data: None });
+                continue;
+            }
+            match fetch_park_info(ip.trim()) {
+                Ok(info) => send_json(request, 200, ApiResponse { code: 200, msg: "OK".into(), data: Some(info) }),
+                Err(e) => send_json(request, 500, ApiResponse::<()> { code: 500, msg: e, data: None }),
+            }
+            continue;
+        }
+
+        // 2.6 该车场已知的岗亭清单 (refresh=1 时顺带向车场实时读取)
+        if url.starts_with("/api/park/booths") && method == "GET" {
+            let ip = query_param(&url, "server_ip").unwrap_or_default();
+            let ip = ip.trim().to_string();
+            if ip.is_empty() {
+                send_json(request, 400, ApiResponse::<()> { code: 400, msg: "缺少 server_ip".into(), data: None });
+                continue;
+            }
+
+            let refresh = query_param(&url, "refresh").map_or(false, |v| v == "1");
+            let mut booths = remote::park_override(&ip).map(|m| m.booths).unwrap_or_default();
+            let mut msg = "已保存的岗亭清单".to_string();
+
+            if refresh || booths.is_empty() {
+                println!("🔎 正在读取车场 [{}] 的岗亭列表...", ip);
+                match query_booths(&ip) {
+                    Ok(list) => {
+                        msg = format!("已从车场读取到 {} 个岗亭", list.len());
+                        booths = list;
+                        // 记下来，供以后没有 SSH 时继续选择
+                        if let Err(e) = remote::remember_booths(&ip, &booths) {
+                            eprintln!("  ⚠️ 保存岗亭清单失败: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        if booths.is_empty() {
+                            send_json(request, 500, ApiResponse::<()> {
+                                code: 500,
+                                msg: format!("读取岗亭列表失败: {}", e),
+                                data: None,
+                            });
+                            continue;
+                        }
+                        msg = format!("实时读取失败({}), 以下为上次保存的清单", e);
+                    }
+                }
+            }
+
+            send_json(request, 200, ApiResponse { code: 200, msg, data: Some(booths) });
             continue;
         }
 

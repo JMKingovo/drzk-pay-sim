@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use chrono::Local;
 
-use crate::models::{DetectedPopup, ParkDetails, PayResultData, ServerConfig};
+use crate::models::{Booth, DetectedPopup, ParkDetails, ParkHttpInfo, PayResultData, ServerConfig};
 use crate::remote;
 
 pub type SharedPopup = Arc<Mutex<Option<DetectedPopup>>>;
@@ -148,23 +148,20 @@ pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
         ));
     }
 
-    // 2. 查岗亭与操作员 (用于连接出口监听通道)
-    //    实测岗亭 online 标志为 0 时通道依然接受连接，因此这里优先选在线岗亭、但不强制要求在线，
-    //    否则岗亭心跳一旦掉线会连带把出口监听功能一起关掉。
+    // 2. 查该车场的全部岗亭
+    //    既用于连接出口监听通道，也存下来供界面下拉选择（下次没有 SSH 时也能选）。
     //    岗亭只影响出口监听与开闸联动，不影响支付投递，取不到时也不判定整体失败。
-    let sql_booth =
-        "SELECT box_id, loginName FROM park_local_set ORDER BY online DESC, box_id ASC LIMIT 1;";
-    let (box_id, login_name) = match remote::run_sql(server_ip, sql_booth) {
-        Ok(out) => match remote::parse_rows(&out).first() {
-            Some(row) if row.len() >= 2 && !row[0].is_empty() => (row[0].clone(), row[1].clone()),
-            _ => {
+    let (booths, box_id, login_name) = match query_booths(server_ip) {
+        Ok(booths) => match booths.first() {
+            Some(b) => (booths.clone(), b.box_id.clone(), b.login_name.clone()),
+            None => {
                 println!("  ⚠️ 车场 {} 未取到岗亭信息，出口监听与开闸联动将不可用", server_ip);
-                (String::new(), String::new())
+                (Vec::new(), String::new(), String::new())
             }
         },
         Err(e) => {
             println!("  ⚠️ 车场 {} 的岗亭信息读取失败 ({}), 出口监听与开闸联动将不可用", server_ip, e);
-            (String::new(), String::new())
+            (Vec::new(), String::new(), String::new())
         }
     };
 
@@ -175,6 +172,87 @@ pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
         mqtt_host,
         mqtt_user,
         mqtt_pwd,
+        booths,
+    })
+}
+
+/// 查该车场的全部岗亭 (SSH+MySQL)
+///
+/// 实测岗亭 online 标志为 0 时通道依然接受连接，因此按"在线优先、机号最小"排序返回，
+/// 由调用方取第一个作为连接目标，但不强制要求在线。
+pub fn query_booths(server_ip: &str) -> Result<Vec<Booth>, String> {
+    let sql =
+        "SELECT box_id, loginName, online FROM park_local_set ORDER BY online DESC, box_id ASC;";
+    let out = remote::run_sql(server_ip, sql)?;
+
+    Ok(remote::parse_rows(&out)
+        .into_iter()
+        .filter(|r| r.len() >= 2 && !r[0].is_empty())
+        .map(|r| Booth {
+            box_id: r[0].clone(),
+            login_name: r[1].clone(),
+            online: r.get(2).map(|v| v == "1").unwrap_or(false),
+        })
+        .collect())
+}
+
+/// 通过 HTTP 直接向车场服务要车场信息 (POST /box/push/getParkInfo)
+///
+/// 实测该接口不校验身份，因此**不需要 SSH** 就能拿到车场编号，
+/// 用于自动填充与核对（手填的编号若与它不一致，说明填错了，报文会投递到没人订阅的主题）。
+pub fn fetch_park_info(server_ip: &str) -> Result<ParkHttpInfo, String> {
+    let host = if server_ip.contains(':') {
+        server_ip.to_string()
+    } else {
+        format!("{}:8089", server_ip)
+    };
+    let body = "{}";
+    let request = format!(
+        "POST /box/push/getParkInfo HTTP/1.1\r\n\
+         Host: {}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        host,
+        body.len(),
+        body
+    );
+
+    let mut stream = TcpStream::connect_timeout(
+        &host.parse().map_err(|e| format!("车场地址解析失败: {}", e))?,
+        Duration::from_secs(3),
+    )
+    .map_err(|e| format!("连接车场 {} 失败: {}", host, e))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
+    stream.write_all(request.as_bytes()).map_err(|e| format!("发送请求失败: {}", e))?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|e| format!("读取响应失败: {}", e))?;
+    let resp = String::from_utf8_lossy(&buf);
+
+    let payload = match resp.find("\r\n\r\n") {
+        Some(pos) => &resp[pos + 4..],
+        None => return Err("车场响应格式异常".to_string()),
+    };
+    let (start, end) = match (payload.find('{'), payload.rfind('}')) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return Err("车场未返回 JSON".to_string()),
+    };
+
+    let v: serde_json::Value =
+        serde_json::from_str(&payload[start..=end]).map_err(|e| format!("解析车场信息失败: {}", e))?;
+    let b = v.get("body").ok_or_else(|| "车场信息里没有 body".to_string())?;
+
+    let park_no = b.get("projectNo").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if park_no.is_empty() {
+        return Err("车场信息里没有 projectNo".to_string());
+    }
+
+    Ok(ParkHttpInfo {
+        park_no,
+        project_name: b.get("projectName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        payment: b.get("payment").and_then(|x| x.as_str()).unwrap_or("").to_string(),
     })
 }
 

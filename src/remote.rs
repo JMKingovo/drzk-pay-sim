@@ -150,6 +150,28 @@ pub fn update_park_override(server_ip: &str, up: &crate::models::ParkConfigUpdat
     Ok(merged)
 }
 
+/// 记下某个车场已知的岗亭清单 (供界面下拉选择，没有 SSH 时也能选)
+pub fn remember_booths(server_ip: &str, booths: &[crate::models::Booth]) -> Result<(), String> {
+    if booths.is_empty() {
+        return Ok(());
+    }
+
+    let mut lock = REMOTE.write().unwrap();
+    let store = lock.get_or_insert_with(|| Store {
+        remote: RemoteAccess::default(),
+        parks: HashMap::new(),
+    });
+    store
+        .parks
+        .entry(server_ip.to_string())
+        .or_default()
+        .booths = booths.to_vec();
+    let snapshot = store.clone();
+    drop(lock);
+
+    save_store(&snapshot)
+}
+
 /// 探测成功后把手填值更新为最新探测结果 (下次没有 SSH 时可直接使用)
 pub fn remember_probed(server_ip: &str, details: &ParkDetails) -> Result<(), String> {
     let mut lock = REMOTE.write().unwrap();

@@ -571,9 +571,12 @@
 
         <div id="cfgParkGroup" style="display: none;">
           <div class="cfg-row">
-            <label>车场编号 (park_no)</label>
+            <label>车场编号 (park_no)
+              <a href="javascript:void(0)" onclick="loadParkHttpInfo()" style="float:right; font-weight:normal; color:var(--primary);">读取车场自报编号</a>
+            </label>
             <input type="text" id="cfgParkNo" class="text-input" placeholder="留空表示不修改，例如 H51810900057">
           </div>
+          <div id="cfgParkHttpInfo" style="display: none; font-size: 12px; color: var(--text-muted); background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: -6px 0 12px;"></div>
           <div class="cfg-row">
             <label>支付 MQTT 地址 (host:port)</label>
             <input type="text" id="cfgMqttHost" class="text-input" placeholder="留空表示不修改，例如 a.drzk.cn:62181">
@@ -587,12 +590,22 @@
             <input type="password" id="cfgMqttPwd" class="text-input" placeholder="留空表示不修改">
           </div>
           <div class="cfg-row">
-            <label>岗亭号 (box_id)</label>
-            <input type="text" id="cfgBoxId" class="text-input" placeholder="留空表示不修改；不填则无法监听出口弹窗">
+            <label>岗亭（从车场读取后选择）
+              <a href="javascript:void(0)" onclick="loadBooths(true)" style="float:right; font-weight:normal; color:var(--primary);">重新读取岗亭列表</a>
+            </label>
+            <select id="cfgBoothSelect" class="text-input" onchange="onBoothSelect(this)">
+              <option value="">（请选择岗亭）</option>
+            </select>
           </div>
-          <div class="cfg-row">
-            <label>岗亭操作员 (loginName)</label>
-            <input type="text" id="cfgLoginName" class="text-input" placeholder="留空表示不修改">
+          <div class="cfg-row" style="display: flex; gap: 8px;">
+            <div style="flex: 1;">
+              <label>岗亭号 (box_id)</label>
+              <input type="text" id="cfgBoxId" class="text-input" placeholder="留空表示不修改">
+            </div>
+            <div style="flex: 1;">
+              <label>操作员 (loginName)</label>
+              <input type="text" id="cfgLoginName" class="text-input" placeholder="留空表示不修改">
+            </div>
           </div>
         </div>
 
@@ -1003,11 +1016,66 @@
 
     // ============ 连接配置弹窗（SSH / 数据库 / 车场参数）============
     let cfgMode = "ssh";
+    let cfgBooths = [];      // 当前车场已知的岗亭清单
     const CFG_FIELDS = [
       "cfgSshUser", "cfgSshPwd", "cfgSshPort",
       "cfgDbUser", "cfgDbPwd", "cfgDbName",
       "cfgParkNo", "cfgMqttHost", "cfgMqttUser", "cfgMqttPwd", "cfgBoxId", "cfgLoginName"
     ];
+
+    // 选中岗亭后自动填好岗亭号与操作员（也可手改）
+    function onBoothSelect(sel) {
+      const b = cfgBooths[Number(sel.value)];
+      if (!b) return;
+      document.getElementById("cfgBoxId").value = b.box_id;
+      document.getElementById("cfgLoginName").value = b.login_name;
+    }
+
+    // 读取车场已保存/已知的岗亭清单；refresh=true 时向车场实时读取
+    async function loadBooths(refresh) {
+      const sel = document.getElementById("cfgBoothSelect");
+      const ip = document.getElementById("serverIp").value.trim();
+      if (!ip) {
+        sel.innerHTML = '<option value="">（请先填写目标车场 IP）</option>';
+        return;
+      }
+      const old = sel.value;
+      if (refresh && !cfgBooths.length) sel.innerHTML = '<option value="">正在读取...</option>';
+      try {
+        const res = await (await fetch(`/api/park/booths?server_ip=${encodeURIComponent(ip)}${refresh ? "&refresh=1" : ""}`)).json();
+        if (res.code !== 200) {
+          sel.innerHTML = '<option value="">（读取失败）</option>';
+          if (refresh) alert("读取岗亭列表失败: " + res.msg);
+          return;
+        }
+        cfgBooths = res.data || [];
+        sel.innerHTML = '<option value="">（请选择岗亭）</option>' + cfgBooths.map((b, i) =>
+          `<option value="${i}">${escapeHtml(b.box_id)} · ${escapeHtml(b.login_name)}${b.online ? "（在线）" : "（离线）"}</option>`
+        ).join("");
+        if (old) sel.value = old;
+        if (refresh) console.log(res.msg);
+      } catch (e) {
+        sel.innerHTML = '<option value="">（读取失败）</option>';
+        if (refresh) alert("读取岗亭列表异常: " + e.message);
+      }
+    }
+
+    // 直接向车场服务要它的车场编号（该接口不需要 SSH，也不需要身份）
+    async function loadParkHttpInfo() {
+      const ip = document.getElementById("serverIp").value.trim();
+      if (!ip) { alert("请先填写目标车场 IP"); return; }
+      try {
+        const res = await (await fetch(`/api/park/info?server_ip=${encodeURIComponent(ip)}`)).json();
+        if (res.code !== 200) { alert("读取车场自报信息失败: " + res.msg); return; }
+        const d = res.data;
+        document.getElementById("cfgParkNo").value = d.park_no;
+        const box = document.getElementById("cfgParkHttpInfo");
+        box.style.display = "block";
+        box.innerText = `车场自报：编号 ${d.park_no} ｜ 名称 ${d.project_name} ｜ 已开通支付方式 ${d.payment}`;
+      } catch (e) {
+        alert("读取车场信息异常: " + e.message);
+      }
+    }
 
     function openRemoteConfig(mode) {
       cfgMode = mode;
@@ -1019,6 +1087,13 @@
       document.getElementById("cfgMask").className = "modal-mask show";
       // 输入框一律留空：保持"留空=不修改"的语义，避免把回显值当成新值提交
       CFG_FIELDS.forEach(id => { document.getElementById(id).value = ""; });
+      document.getElementById("cfgParkHttpInfo").style.display = "none";
+      if (mode === "park") {
+        // 先用已知清单即时渲染，再向车场刷新一次拿最新的在线状态
+        cfgBooths = [];
+        loadBooths(false);
+        loadBooths(true);
+      }
       loadRemoteConfig();
     }
 
@@ -1052,6 +1127,7 @@
               `岗亭 ${escapeHtml(c.manual_box_id || "—")}`
             : "该车场还没有手填值。探测不通时，填好这里也能正常下发支付。";
           el.innerHTML = `目标车场: <strong>${escapeHtml(c.server_ip || "(未填 IP)")}</strong><br>${eff}<br>${manual}` +
+            (c.booths && c.booths.length ? `<br>已知岗亭 ${c.booths.length} 个，可在上面下拉选择` : "<br>暂无岗亭清单，可点「重新读取岗亭列表」") +
             (c.saved_parks && c.saved_parks.length ? `<br>已配置过的车场：${escapeHtml(c.saved_parks.join("、"))}` : "");
           return;
         }

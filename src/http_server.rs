@@ -606,11 +606,23 @@ pub fn start_http_server(
 
         if url == "/api/status" || url == "/api/health" {
             let cfg = { shared_config.lock().unwrap().clone() };
+            // 不回显密码：服务监听在 0.0.0.0，明文回显等于把车场支付凭证暴露给同网段
             let status_json = serde_json::json!({
                 "service": "drzk-pay-sim",
                 "status": "RUNNING",
                 "version": "0.5.0",
-                "current_server": cfg
+                "current_server": {
+                    "server_ip": cfg.server_ip,
+                    "park_no": cfg.park_no,
+                    "box_id": cfg.box_id,
+                    "login_name": cfg.login_name,
+                    "is_connected": cfg.is_connected,
+                    "status_text": cfg.status_text,
+                    "park_config_source": cfg.park_config_source,
+                    "mqtt_host": cfg.mqtt_host,
+                    "mqtt_user": cfg.mqtt_user,
+                    "mqtt_pwd_set": !cfg.mqtt_pwd.is_empty(),
+                }
             });
             send_raw_json(request, 200, status_json.to_string());
             continue;

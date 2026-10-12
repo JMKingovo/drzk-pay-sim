@@ -201,14 +201,29 @@ pub fn remember_probed(server_ip: &str, details: &ParkDetails) -> Result<(), Str
 /// 配置文件路径：可由 DRZK_CONFIG_FILE 指定，默认放在用户目录下
 ///
 /// 放在用户目录而非程序目录，避免这个含明文密码的文件被误提交进代码仓库。
+/// Windows 上没有 HOME(是 USERPROFILE)，两者都取不到时退到程序所在目录。
 pub fn config_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("DRZK_CONFIG_FILE") {
         if !p.trim().is_empty() {
             return std::path::PathBuf::from(p);
         }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(home).join(".drzk-pay-sim.json")
+
+    for key in ["HOME", "USERPROFILE"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.trim().is_empty() {
+                return std::path::PathBuf::from(v).join(".drzk-pay-sim.json");
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join(".drzk-pay-sim.json");
+        }
+    }
+
+    std::path::PathBuf::from(".drzk-pay-sim.json")
 }
 
 /// 配置文件结构：SSH/数据库凭据扁平存放，另加 parks 表存放各车场手填参数

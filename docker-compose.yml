@@ -1,0 +1,16 @@
+services:
+  drzk-pay-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: drzk-pay-sim:latest
+    container_name: drzk-pay-sim
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/data
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - DRZK_CONFIG_FILE=/data/.drzk-pay-sim.json
+      - TZ=Asia/Shanghai
+    command: ["--server", "192.168.65.58", "--no-open"]

@@ -14,8 +14,8 @@ pub type SharedConfig = Arc<Mutex<ServerConfig>>;
 /// 本进程内已下发的支付记录 (最近若干笔，供界面刷新后仍能查看)
 pub type SharedPayHistory = Arc<Mutex<Vec<PayResultData>>>;
 
-/// 支付记录最多保留的条数
-pub const PAY_HISTORY_LIMIT: usize = 50;
+/// 已下发并持久化留存的支付记录最多保留条数 (长期保存所有测试流水)
+pub const PAY_HISTORY_LIMIT: usize = 2000;
 
 pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup) {
     let cfg = shared_config.clone();

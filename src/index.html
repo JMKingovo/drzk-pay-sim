@@ -945,7 +945,7 @@
 
           const payBtn = document.getElementById("innerPayBtn");
           payBtn.disabled = false;
-          payBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
+          payBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元]</span>`;
           showToast(`已成功查到 [${carNo}] 在场费用: ${moneyVal} 元`, "success", 2500);
         } else {
           resetInnerFee("未查到在场费用，请重新查询");
@@ -1005,16 +1005,16 @@
         } else {
           showToast("预缴失败: " + (data.msg || "未知错误"), "error", 4500);
           btn.disabled = false;
-          btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
+          btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元]</span>`;
         }
       } catch (err) {
         showToast("请求异常: " + err.message, "error", 4500);
         btn.disabled = false;
-        btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
+        btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元]</span>`;
       }
     }
 
-    // ============ 支付记录（存在后台，刷新页面不会丢）============
+    // ============ 支付记录（持久化落盘，重启也不会丢失）============
     async function loadPayHistory() {
       try {
         const res = await (await fetch("/api/pay/history")).json();
@@ -1038,9 +1038,9 @@
       }
 
       panel.className = "receipt-panel show";
-      count.innerText = "最近 " + list.length + " 笔（最新在前）";
+      count.innerText = "共 " + list.length + " 笔（最新在前）";
       box.innerHTML = list.map(d => {
-        const scene = d.is_lane ? "出口扫码放行" : "场内扫码预缴 (车不放行)";
+        const scene = d.is_lane ? "出口扫码放行" : "场内扫码预缴";
         const warn = d.auto_out_result && /中止|失败/.test(d.auto_out_result);
         // 出场联动失败时车已缴费但闸没开，必须显性标出来，不能只显示"成功"
         const detail = warn

@@ -277,6 +277,47 @@ fn save_store(store: &Store) -> Result<(), String> {
     Ok(())
 }
 
+/// 支付历史文件路径 (优先 DRZK_HISTORY_FILE，否则放在 config_path 相同目录下)
+pub fn history_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("DRZK_HISTORY_FILE") {
+        if !p.trim().is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    let cfg = config_path();
+    if let Some(parent) = cfg.parent() {
+        parent.join(".drzk-pay-sim-history.json")
+    } else {
+        std::path::PathBuf::from(".drzk-pay-sim-history.json")
+    }
+}
+
+/// 读取持久化保存的全部支付记录 (文件不存在或损坏时返回空列表)
+pub fn load_pay_history() -> Vec<crate::models::PayResultData> {
+    let path = history_path();
+    if let Ok(text) = fs::read_to_string(&path) {
+        if let Ok(list) = serde_json::from_str(&text) {
+            return list;
+        }
+    }
+    Vec::new()
+}
+
+/// 持久化保存支付记录 (文件权限 0600)
+pub fn save_pay_history(list: &[crate::models::PayResultData]) -> Result<(), String> {
+    let path = history_path();
+    let text = serde_json::to_string_pretty(list).map_err(|e| format!("序列化失败: {}", e))?;
+    fs::write(&path, text).map_err(|e| format!("写入 {} 失败: {}", path.display(), e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+
+    Ok(())
+}
+
 /// 启动时初始化配置：配置文件 → 环境变量 → 命令行参数 (后者覆盖前者)
 pub fn init(args: &[String]) {
     let mut store = load_file().unwrap_or_default();
@@ -660,5 +701,37 @@ mod tests {
         cfg.apply_update(&creds([None, None, None, None, Some(""), None]));
 
         assert_eq!(cfg.db_pwd, "keep-me");
+    }
+
+    #[test]
+    fn 支付记录持久化保存与恢复() {
+        let tmp_file = std::env::temp_dir().join("test_pay_history.json");
+        std::env::set_var("DRZK_HISTORY_FILE", &tmp_file);
+
+        let records = vec![
+            crate::models::PayResultData {
+                car_no: "粤B88888".into(),
+                money: 15.0,
+                pay_type: 57,
+                pay_type_name: "聚合支付V6".into(),
+                order_num: "45000004990001".into(),
+                out_trade_no: "SXF0001".into(),
+                pay_time: "2026-11-03 12:00:00".into(),
+                target_park_no: "H51810900057".into(),
+                target_server_ip: "192.168.65.58".into(),
+                auto_out_result: None,
+                is_lane: false,
+                billing_context_from_park: false,
+            }
+        ];
+
+        save_pay_history(&records).expect("保存应成功");
+        let loaded = load_pay_history();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].car_no, "粤B88888");
+        assert_eq!(loaded[0].money, 15.0);
+
+        let _ = fs::remove_file(&tmp_file);
+        std::env::remove_var("DRZK_HISTORY_FILE");
     }
 }

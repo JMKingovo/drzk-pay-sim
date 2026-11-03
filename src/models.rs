@@ -54,7 +54,7 @@ pub struct ApiResponse<T> {
     pub data: Option<T>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayResultData {
     pub car_no: String,
     pub money: f64,
@@ -67,8 +67,10 @@ pub struct PayResultData {
     pub target_server_ip: String,
     pub auto_out_result: Option<String>,
     /// 是否为出口车道缴费 (false = 场内预缴)
+    #[serde(default)]
     pub is_lane: bool,
     /// 车场编号是否由本次报文的计费上下文确认为真实入场记录
+    #[serde(default)]
     pub billing_context_from_park: bool,
 }
 

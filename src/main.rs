@@ -129,7 +129,11 @@ fn main() {
         let shared_config = Arc::new(Mutex::new(cfg));
 
         let shared_popup = Arc::new(Mutex::new(None));
-        let shared_history: ws_listener::SharedPayHistory = Arc::new(Mutex::new(Vec::new()));
+        let loaded_history = remote::load_pay_history();
+        if !loaded_history.is_empty() {
+            println!("  📋 已从持久化文件加载 {} 笔历史支付记录", loaded_history.len());
+        }
+        let shared_history: ws_listener::SharedPayHistory = Arc::new(Mutex::new(loaded_history));
         start_ws_listener(shared_config.clone(), shared_popup.clone());
         // 岗亭自动跟随：定期复查车场在线岗亭，变了就切过去（界面指定了岗亭则不切）
         ws_listener::start_booth_watcher(shared_config.clone(), 30);

@@ -531,11 +531,14 @@ pub fn start_http_server(
                         let mut lock = shared_popup.lock().unwrap();
                         *lock = None;
                     }
-                    // 记录本笔，最新在前，供界面刷新后查看
+                    // 记录本笔并持久化落盘，重启后依然保存
                     {
                         let mut hist = shared_history.lock().unwrap();
                         hist.insert(0, result.clone());
                         hist.truncate(PAY_HISTORY_LIMIT);
+                        if let Err(e) = remote::save_pay_history(&hist) {
+                            eprintln!("  ⚠️ 保存支付记录到持久化文件失败: {}", e);
+                        }
                     }
 
                     send_json(request, 200, ApiResponse {

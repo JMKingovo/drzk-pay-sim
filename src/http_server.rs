@@ -596,7 +596,18 @@ pub fn start_http_server(
             continue;
         }
 
-        // 7. 静态页面
+        // 7. 静态页面与网站图标
+        if url == "/favicon.ico" || url == "/favicon.svg" {
+            let svg_icon = include_str!("favicon.svg");
+            let resp = Response::from_string(svg_icon)
+                .with_status_code(200)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"image/svg+xml"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=86400"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            request.respond(resp).ok();
+            continue;
+        }
+
         if url == "/" || url == "/index.html" {
             let html_content = include_str!("index.html");
             let resp = Response::from_string(html_content)

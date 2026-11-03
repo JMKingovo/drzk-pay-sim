@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- 背景圆角矩形 -->
+  <rect width="64" height="64" rx="16" fill="url(#bgGrad)"/>
+  <!-- 白色加粗停车标志 P -->
+  <path d="M19 14 H35 C42.5 14 47 18.5 47 25.5 C47 32.5 42.5 37 35 37 H27.5 V50 H19 Z M27.5 21.5 V29.5 H34 C37.5 29.5 39 28 39 25.5 C39 23 37.5 21.5 34 21.5 Z" fill="#ffffff" filter="url(#shadow)"/>
+  <!-- 右下角极速支付微标：深色外圈 + 翠绿底 + 纯白闪电 -->
+  <circle cx="48" cy="48" r="13" fill="#0f172a" opacity="0.3"/>
+  <circle cx="48" cy="48" r="12" fill="#059669"/>
+  <!-- 白色闪电 -->
+  <path d="M49 39 L42.5 48.5 H47.5 L46.5 56 L53.5 46.5 H48.5 Z" fill="#ffffff"/>
+</svg>

@@ -59,6 +59,21 @@
 ./drzk-pay-sim --car 粤B88802 --money 15.0 --server 192.168.65.59 --pay-type 1 --auto-out
 ```
 
+### 3. Docker 容器化部署 (推荐服务器常驻)
+项目根目录已提供轻量化 `Dockerfile`（基于 Alpine，自动配置国内阿里源）与 `docker-compose.yml`：
+```bash
+# 1. 构建全平台产物并复制 Linux 二进制
+./build-all.sh
+cp dist/drzk-pay-sim-linux-x86_64 ./
+
+# 2. 启动容器 (网络模式为 host，直接与车场通信)
+docker compose up -d
+
+# 3. 查看运行日志
+docker logs -f drzk-pay-sim
+```
+数据与车场参数会自动持久化到宿主机 `./data/` 目录。
+
 ---
 
 ## 远程探测凭据配置
@@ -199,6 +214,85 @@ brew install mingw-w64
 
 **Windows 上必须至少满足第 2 或第 3 条**，否则车场探测会失败：界面显示"车场信息探测失败"，
 且出于安全设计**不会下发任何支付**（宁可不发，也不发错车场）。
+
+---
+
+## 车场对接与底层机制知识沉淀 (Troubleshooting)
+
+在与线下 5.0 车场调试支付时，若遇到“模拟器提示注入成功，但车场查不到记录”或“支付类型显示为定点收费”等问题，可依据以下机制进行快速排查：
+
+### 1. 为什么模拟器提示支付成功，但车场没有任何记录？
+
+本工具的“注入成功”是指报文已成功由 MQTT 协议发布到了指定的 EMQX Broker 对应主题 `server/data/publish/phone/<park_no>`。如果车场并未写入记录，请按以下顺序排查车场本身状态：
+
+#### ① 车场是否关闭了“云端总开关”（最常见根因）
+车场 Java 核心程序 `/wasHome/server/box.jar`（内部 `PayClientMQTT.class`）对云端消息订阅有硬性前置判断：
+```java
+public boolean allowCloud() {
+    return "1".equals(GlobalPark.propMap.get("UPLOAD_DATA_CLOUD"))
+        && "1".equals(GlobalPark.propMap.get("MQTT_SETTING_CLOUD_ON_OFF"));
+}
+
+private String[] cloudTopics() {
+    String parkNum = GlobalPark.propMap.get("PARK_NUM");
+    if (!this.allowCloud()) {
+        // 【关键】当云端开关关闭时，车场直接取消订阅支付通知主题！
+        return new String[] { "base", "heartbeat/pay/" + parkNum };
+    }
+    // 只有云端开启时才订阅：server/data/publish/phone/<parkNum>
+}
+```
+**诊断方法：**
+- 登录车场数据库执行：
+  ```sql
+  SELECT parameter_code, parameter_value FROM sys_parameters 
+  WHERE parameter_code IN ('UPLOAD_DATA_CLOUD', 'MQTT_SETTING_CLOUD_ON_OFF');
+  ```
+- 若任意一项为 `0`，车场会自动退回连接本机的 `tcp://127.0.0.1:1883`，并且**彻底取消对云端支付主题的监听**，此时云端发布的任何支付消息车场均无法接收。
+- **解决办法：** 在车场后台开启“上传数据云端”与“云端总开关”，或将这两个参数置为 `1` 并重启车场 `box.jar`（`service server restart`）。
+
+#### ② 支付 MQTT Broker 地址是否一致
+- 车场实际连接的 Broker 地址取自 `sys_parameters` 中的 `MQTT_SETTING_PAY_URL_ONLINE`；
+- 查看车场运行日志 `/wasHome/server/logs/web-box.log` 确认其实际连接目标：
+  ```log
+  DEBUG [main] c.d.m.PayClientMQTT:connect - 支付mqtt连接到:tcp://a.drzk.cn:62181
+  INFO  [main] c.d.m.PayClientMQTT:subscribe - 支付链路订阅主题：[... server/data/publish/phone/H51810900057 ...]
+  ```
+- 必须确保模拟器中配置的 `MQTT Broker` 与车场当前实际连通的 Broker 地址完全一致。
+
+#### ③ 车场接收日志查证
+- 车场是否接收到报文可直接查看：
+  ```bash
+  tail -f /wasHome/server/logs/MQTTReceived.log
+  ```
+  正常收到支付时会打印：`c.d.m.MqttReceiptServiceImpl:receiveMsgFromCloud - 云端下发数据是：topic=server/data/publish/phone/<park_no>, message=...`。若此日志无输出，说明消息根本未从 Broker 到达车场。
+
+---
+
+### 2. “出口收费”与“定点收费”的业务判定机制
+
+车场数据库 `park_central_charge` 表中的 `charge_type` 字段定义为：
+> `0.出口收费 1.定点收费 2.逾时收费 3.脱机收费`
+
+车场后台展示的支付方式（例如 `聚合支付V6` 还是 `聚合支付V6(定点收费)`）正是根据 `charge_type` 决定的：
+- **出口收费条件**：
+  1. 报文协议必须对齐：`header="SCANCODE"`、`paymentScene="LANE_QR"`、`channelType=1`、`paymentType=0`。
+  2. 真实计费上下文对齐：报文中的 `inId`、入场时间 `inTime`、停放时长 `duration` 必须与该车在场内未结清的记录完全吻合。本工具在执行出口支付前，会自动调用车场 `/box/fee/current` 接口获取真实的计费上下文并填入；若取不到真实计费信息，车场会因为无法与车道待缴费记录关联，而自动降级归类为定点收费（`charge_type=1`）。
+- **场内预缴**：
+  协议采用 `header="TEMP"`、`paymentScene="IN_LOT"`、`channelType=0`、`paymentType=1`，车场会正确入账为定点收费，且绝不会触发开闸。
+
+---
+
+### 3. 如何在车场侧识别模拟器生成的流水？
+
+- 模拟器生成的交易流水单号（`order_num` / `paymentTnx`）统一采用固定前缀 **`4500000499`** + 14位时间戳 + 8位随机码（例如 `4500000499202611031112259490c9d9`）。
+- 在车场端可以通过以下 SQL 快速筛查所有由本工具生成的支付账单：
+  ```sql
+  SELECT id, car_no, in_time, pay_charge_time, pay_charge, charge_type, order_num 
+  FROM park_central_charge 
+  WHERE order_num LIKE '4500000499%' 
+  ORDER BY id DESC;
+  ```
 
 ---
 

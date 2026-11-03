@@ -355,25 +355,59 @@
     }
     .receipt-auto-out.warn { background: #fef2f2; color: #b91c1c; font-weight: 500; }
 
-    /* 支付记录列表 */
+    /* 支付记录列表 (自适应多端，超长文本自动换行不溢出) */
     .pay-row {
-      display: grid;
-      grid-template-columns: 92px 110px 90px 1fr;
-      gap: 12px;
-      align-items: center;
-      padding: 9px 10px;
-      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 12px;
+      border-radius: 8px;
       font-size: 12px;
       background: #f8fafc;
-      margin-bottom: 6px;
+      border: 1px solid #f1f5f9;
+      margin-bottom: 8px;
+      min-width: 0;
+      transition: background 0.15s;
     }
-    .pay-row .pay-car { font-size: 14px; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; }
-    .pay-row .pay-money { font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
-    .pay-row .pay-time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-    .pay-row .pay-detail { color: #475569; }
-    .pay-row .pay-order { color: var(--text-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; display: block; margin-top: 2px; }
-    .pay-row.warn { background: #fef2f2; }
+    .pay-row:hover { background: #f1f5f9; }
+    .pay-row.warn { background: #fef2f2; border-color: #fee2e2; }
+    .pay-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .pay-row-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .pay-row .pay-car { font-size: 15px; font-weight: 700; color: #1e293b; letter-spacing: 0.5px; }
+    .pay-row .pay-money { font-size: 14px; font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
+    .pay-row .pay-time { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
+    .pay-row-bottom {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding-top: 5px;
+      border-top: 1px dashed var(--border);
+      min-width: 0;
+    }
+    .pay-row .pay-detail {
+      color: #475569;
+      line-height: 1.5;
+      word-break: break-all;
+      overflow-wrap: break-word;
+    }
     .pay-row.warn .pay-detail { color: #b91c1c; font-weight: 500; }
+    .pay-row .pay-order {
+      color: var(--text-sub);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      word-break: break-all;
+      overflow-wrap: break-word;
+    }
     .pay-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 6px 0 2px; }
 
     /* 优雅浮动通知 (Toast) */
@@ -1052,21 +1086,28 @@
       box.innerHTML = list.map(d => {
         const scene = d.is_lane ? "出口扫码放行" : "场内扫码预缴";
         const warn = d.auto_out_result && /中止|失败/.test(d.auto_out_result);
-        // 出场联动失败时车已缴费但闸没开，必须显性标出来，不能只显示"成功"
-        const detail = warn
-          ? "⚠ 出场联动未完成：" + d.auto_out_result
-          : d.auto_out_result
-            ? "出场联动：" + d.auto_out_result
-            : d.pay_type_name + " · " + scene;
-        const ctxTip = d.is_lane && !d.billing_context_from_park
-          ? "<span style='color:#b45309;'>（未取到真实计费上下文，可能被车场记成定点收费）</span>"
+        const autoOutText = d.auto_out_result
+          ? (warn ? "⚠ 出场联动未完成：" + d.auto_out_result : "出场联动：" + d.auto_out_result)
           : "";
+        const ctxTip = d.is_lane && !d.billing_context_from_park
+          ? "<span style='color:#b45309;'>（未取到真实计费上下文，可能被记为定点收费）</span>"
+          : "";
+
         return `<div class="pay-row${warn ? " warn" : ""}">
-          <div class="pay-car">${escapeHtml(d.car_no)}</div>
-          <div class="pay-money">${d.money.toFixed(2)} 元</div>
-          <div class="pay-time">${escapeHtml((d.pay_time || "").slice(5))}</div>
-          <div class="pay-detail">${escapeHtml(detail)} ${ctxTip}
-            <span class="pay-order">${escapeHtml(d.order_num)} · ${escapeHtml(d.target_park_no || "")}</span>
+          <div class="pay-row-top">
+            <div class="pay-row-left">
+              <span class="pay-car">${escapeHtml(d.car_no)}</span>
+              <span class="pay-money">${d.money.toFixed(2)} 元</span>
+            </div>
+            <span class="pay-time">${escapeHtml((d.pay_time || "").slice(5))}</span>
+          </div>
+          <div class="pay-row-bottom">
+            <div class="pay-detail">
+              <span>${escapeHtml(d.pay_type_name)} · ${escapeHtml(scene)}</span>
+              ${autoOutText ? `<span style="margin-left: 8px; color: ${warn ? "#b91c1c" : "var(--primary)"}; font-weight: 500;">${escapeHtml(autoOutText)}</span>` : ""}
+              ${ctxTip}
+            </div>
+            <div class="pay-order">${escapeHtml(d.order_num)} · ${escapeHtml(d.target_park_no || "")}</div>
           </div>
         </div>`;
       }).join("");

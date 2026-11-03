@@ -388,16 +388,14 @@
       pointer-events: none;
     }
     .toast-item {
-      min-width: 260px;
+      min-width: 220px;
       max-width: 560px;
-      padding: 11px 18px;
+      padding: 10px 20px;
       border-radius: 8px;
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 500;
       line-height: 1.5;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      text-align: center;
       box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.05);
       pointer-events: auto;
       opacity: 0;
@@ -427,14 +425,6 @@
       background: #eff6ff;
       color: #1e40af;
       border: 1px solid #bfdbfe;
-    }
-    .toast-icon {
-      font-size: 16px;
-      font-weight: 700;
-      line-height: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
     }
   </style>
 </head>
@@ -1068,7 +1058,7 @@
       ));
     }
 
-    // 优雅轻量的页面顶部浮动消息 (代替原生浏览器阻断式 alert)
+    // 优雅轻量的页面顶部浮动消息 (纯净无图标通知)
     function showToast(message, type = "success", duration = 3500) {
       let container = document.getElementById("toastContainer");
       if (!container) {
@@ -1080,18 +1070,7 @@
 
       const toast = document.createElement("div");
       toast.className = `toast-item toast-${type}`;
-
-      const iconMap = {
-        success: "✔",
-        error: "✖",
-        warning: "⚠",
-        info: "ℹ"
-      };
-
-      toast.innerHTML = `
-        <span class="toast-icon">${iconMap[type] || "ℹ"}</span>
-        <span style="flex: 1; word-break: break-all;">${escapeHtml(message)}</span>
-      `;
+      toast.innerHTML = `<span style="word-break: break-all;">${escapeHtml(message)}</span>`;
 
       container.appendChild(toast);
       requestAnimationFrame(() => toast.classList.add("show"));

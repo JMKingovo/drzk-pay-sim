@@ -373,6 +373,69 @@
     .pay-row.warn { background: #fef2f2; }
     .pay-row.warn .pay-detail { color: #b91c1c; font-weight: 500; }
     .pay-empty { font-size: 12px; color: var(--text-muted); text-align: center; padding: 6px 0 2px; }
+
+    /* 优雅浮动通知 (Toast) */
+    .toast-container {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .toast-item {
+      min-width: 260px;
+      max-width: 560px;
+      padding: 11px 18px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 500;
+      line-height: 1.5;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 10px 25px -3px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.05);
+      pointer-events: auto;
+      opacity: 0;
+      transform: translateY(-16px) scale(0.97);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .toast-item.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .toast-success {
+      background: #ecfdf5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+    }
+    .toast-error {
+      background: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+    .toast-warning {
+      background: #fffbeb;
+      color: #92400e;
+      border: 1px solid #fde68a;
+    }
+    .toast-info {
+      background: #eff6ff;
+      color: #1e40af;
+      border: 1px solid #bfdbfe;
+    }
+    .toast-icon {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
   </style>
 </head>
 <body>
@@ -667,7 +730,7 @@
           const msg = res.msg || "未知错误";
           navStatus.innerText = "切换失败: " + msg.split("\n")[0];
           dot.style.background = "#ef4444";
-          alert("连接车场失败\n" + msg);
+          showToast("连接车场失败: " + msg, "error", 5000);
           return false;
         }
       } catch (e) {
@@ -772,7 +835,7 @@
     // 左侧：出口代缴开闸
     async function doExitPay() {
       if (!currentPopupData || !currentPopupData.car_no) {
-        alert("当前没有检测到出口待缴车辆！");
+        showToast("当前没有检测到出口待缴车辆！", "warning");
         return;
       }
 
@@ -805,12 +868,13 @@
         const data = await resp.json();
         if (data.code === 200 && data.data) {
           loadPayHistory();
+          showToast(`开闸放行成功！[${carNo}] 代缴 ${money.toFixed(2)} 元，已开闸放行并更新流水`, "success");
           setTimeout(() => pollPopup(true), 1500);
         } else {
-          alert("开闸放行失败: " + (data.msg || "未知错误"));
+          showToast("开闸放行失败: " + (data.msg || "未知错误"), "error", 4500);
         }
       } catch (err) {
-        alert("请求异常: " + err.message);
+        showToast("请求异常: " + err.message, "error", 4500);
       } finally {
         btn.disabled = false;
         btn.innerHTML = `<span>立即代缴开闸放行</span>`;
@@ -852,7 +916,7 @@
       const carNo = document.getElementById("innerCarNo").value.trim().toUpperCase();
       const serverIp = document.getElementById("serverIp").value.trim();
       if (!carNo) {
-        alert("请输入车牌号后再查询费用！");
+        showToast("请输入车牌号后再查询费用！", "warning");
         return;
       }
 
@@ -882,13 +946,14 @@
           const payBtn = document.getElementById("innerPayBtn");
           payBtn.disabled = false;
           payBtn.innerHTML = `<span>模拟场内预缴 [${moneyVal} 元] (车不放行)</span>`;
+          showToast(`已成功查到 [${carNo}] 在场费用: ${moneyVal} 元`, "success", 2500);
         } else {
           resetInnerFee("未查到在场费用，请重新查询");
-          alert(json.msg || "未查到在场费用或车辆已出场");
+          showToast(json.msg || "未查到在场费用或车辆已出场", "warning");
         }
       } catch (err) {
         resetInnerFee("查费失败，请重新查询");
-        alert("查费失败: " + err.message);
+        showToast("查费失败: " + err.message, "error");
       } finally {
         queryBtn.disabled = false;
       }
@@ -901,13 +966,13 @@
       const payType = parseInt(document.getElementById("payType").value);
 
       if (!carNo) {
-        alert("请输入场内车牌号！");
+        showToast("请输入场内车牌号！", "warning");
         return;
       }
 
       // 硬性门禁：没有成功查费记录、或查费车牌与当前输入不一致，一律拒绝预缴
       if (!innerFeeState.carNo || innerFeeState.carNo !== carNo) {
-        alert(`请先点击「查询在场费用」，确认 [${carNo}] 的应付金额后再模拟预缴。`);
+        showToast(`请先点击「查询在场费用」，确认 [${carNo}] 的应付金额后再模拟预缴。`, "warning");
         resetInnerFee();
         return;
       }
@@ -934,16 +999,16 @@
         const data = await resp.json();
         if (data.code === 200 && data.data) {
           loadPayHistory();
-          alert(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`);
+          showToast(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`, "success", 4000);
           // 该笔费用已结清，作废本次查费结果，再次下单需重新查费
           resetInnerFee("预缴已完成，再次预缴请重新查费");
         } else {
-          alert("预缴失败: " + (data.msg || "未知错误"));
+          showToast("预缴失败: " + (data.msg || "未知错误"), "error", 4500);
           btn.disabled = false;
           btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
         }
       } catch (err) {
-        alert("请求异常: " + err.message);
+        showToast("请求异常: " + err.message, "error", 4500);
         btn.disabled = false;
         btn.innerHTML = `<span>模拟场内预缴 [${money.toFixed(2)} 元] (车不放行)</span>`;
       }
@@ -1003,6 +1068,42 @@
       ));
     }
 
+    // 优雅轻量的页面顶部浮动消息 (代替原生浏览器阻断式 alert)
+    function showToast(message, type = "success", duration = 3500) {
+      let container = document.getElementById("toastContainer");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "toastContainer";
+        container.className = "toast-container";
+        document.body.appendChild(container);
+      }
+
+      const toast = document.createElement("div");
+      toast.className = `toast-item toast-${type}`;
+
+      const iconMap = {
+        success: "✔",
+        error: "✖",
+        warning: "⚠",
+        info: "ℹ"
+      };
+
+      toast.innerHTML = `
+        <span class="toast-icon">${iconMap[type] || "ℹ"}</span>
+        <span style="flex: 1; word-break: break-all;">${escapeHtml(message)}</span>
+      `;
+
+      container.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.add("show"));
+
+      setTimeout(() => {
+        toast.classList.remove("show");
+        setTimeout(() => {
+          if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 240);
+      }, duration);
+    }
+
     // 车场编号为空即代表未探测成功，绝不能显示成某个"看起来正常"的编号
     function fmtParkNo(v) {
       return v && v.trim() ? v : "未探测";
@@ -1053,7 +1154,7 @@
         const res = await (await fetch(`/api/park/booths?server_ip=${encodeURIComponent(ip)}${refresh ? "&refresh=1" : ""}`)).json();
         if (res.code !== 200) {
           sel.innerHTML = '<option value="">（读取失败）</option>';
-          if (refresh) alert("读取岗亭列表失败: " + res.msg);
+          if (refresh) showToast("读取岗亭列表失败: " + res.msg, "error");
           return;
         }
         cfgBooths = res.data || [];
@@ -1066,24 +1167,25 @@
         if (refresh) console.log(res.msg);
       } catch (e) {
         sel.innerHTML = '<option value="">（读取失败）</option>';
-        if (refresh) alert("读取岗亭列表异常: " + e.message);
+        if (refresh) showToast("读取岗亭列表异常: " + e.message, "error");
       }
     }
 
     // 直接向车场服务要它的车场编号（该接口不需要 SSH，也不需要身份）
     async function loadParkHttpInfo() {
       const ip = document.getElementById("serverIp").value.trim();
-      if (!ip) { alert("请先填写目标车场 IP"); return; }
+      if (!ip) { showToast("请先填写目标车场 IP", "warning"); return; }
       try {
         const res = await (await fetch(`/api/park/info?server_ip=${encodeURIComponent(ip)}`)).json();
-        if (res.code !== 200) { alert("读取车场自报信息失败: " + res.msg); return; }
+        if (res.code !== 200) { showToast("读取车场自报信息失败: " + res.msg, "error"); return; }
         const d = res.data;
         document.getElementById("cfgParkNo").value = d.park_no;
         const box = document.getElementById("cfgParkHttpInfo");
         box.style.display = "block";
         box.innerText = `车场自报：编号 ${d.park_no} ｜ 名称 ${d.project_name} ｜ 已开通支付方式 ${d.payment}`;
+        showToast("已获取车场自报编号: " + d.park_no, "success", 2500);
       } catch (e) {
-        alert("读取车场信息异常: " + e.message);
+        showToast("读取车场信息异常: " + e.message, "error");
       }
     }
 
@@ -1170,7 +1272,7 @@
         if (cfgMode === "park") {
           const serverIp = document.getElementById("serverIp").value.trim();
           if (!serverIp) {
-            alert("请先在顶部填写目标车场 IP，再配置该车场的参数。");
+            showToast("请先在顶部填写目标车场 IP，再配置该车场的参数。", "warning");
             return;
           }
           const boothSel = document.getElementById("cfgBoothSelect").value;
@@ -1200,7 +1302,7 @@
               body: JSON.stringify(payload)
             })).json();
             if (res.code !== 200) {
-              alert("保存失败: " + (res.msg || "未知错误"));
+              showToast("保存失败: " + (res.msg || "未知错误"), "error", 4500);
               return;
             }
             closeRemoteConfig();
@@ -1208,9 +1310,9 @@
             const ok = await switchServer();
             await fetchServerConfig();
             if (ok) {
-              alert("车场参数已保存，并已按新参数接入该车场。");
+              showToast("车场参数已保存，并已按新参数接入该车场。", "success");
             } else {
-              alert(res.msg + "\n（参数已保存，但当前未能接入该车场，请查看顶部状态）");
+              showToast(res.msg + "（参数已保存，但未能接入车场）", "warning", 5000);
             }
           } finally {
             btn.disabled = false;
@@ -1241,7 +1343,7 @@
           })).json();
 
           if (res.code !== 200) {
-            alert("保存失败: " + (res.msg || "未知错误"));
+            showToast("保存失败: " + (res.msg || "未知错误"), "error", 4500);
             return;
           }
 
@@ -1251,15 +1353,16 @@
           const ip = document.getElementById("serverIp").value.trim();
           if (ip) {
             await switchServer();
+            showToast(res.msg || "凭据已保存并重连", "success");
           } else {
-            alert(res.msg || "凭据已保存");
+            showToast(res.msg || "凭据已保存", "success");
           }
         } finally {
           btn.disabled = false;
           btn.innerText = "保存并重连";
         }
       } catch (e) {
-        alert("保存异常: " + e.message);
+        showToast("保存异常: " + e.message, "error", 4500);
       }
     }
   </script>

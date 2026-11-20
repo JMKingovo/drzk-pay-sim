@@ -472,7 +472,9 @@ fn listen_frames(stream: &mut TcpStream, cfg: &SharedConfig, shared_popup: &Shar
 
         if opcode == 0x1 {
             if let Ok(text) = String::from_utf8(payload) {
-                parse_and_update_popup(&text, shared_popup);
+                // 取当前车场 IP，供解析时回查算费接口补全时长
+                let server_ip = { cfg.lock().unwrap().server_ip.clone() };
+                parse_and_update_popup(&text, &server_ip, shared_popup);
             }
         } else if opcode == 0x9 {
             let pong_frame = [0x8A, 0x80, 0xAA, 0xBB, 0xCC, 0xDD];
@@ -481,7 +483,7 @@ fn listen_frames(stream: &mut TcpStream, cfg: &SharedConfig, shared_popup: &Shar
     }
 }
 
-fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
+fn parse_and_update_popup(json_text: &str, server_ip: &str, shared_popup: &SharedPopup) {
     let v: serde_json::Value = match serde_json::from_str(json_text) {
         Ok(val) => val,
         Err(_) => return,
@@ -541,7 +543,7 @@ fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
 
         // 停放时长：优先用报文里的时长字段；没有就按入场时间实时算，
         // 绝不用固定值兜底（否则界面会永远显示同一个数字）。
-        let stay_minute = pay_vo
+        let mut stay_minute = pay_vo
             .and_then(|p| p.get("stayMinute"))
             .and_then(|m| m.as_i64())
             .or_else(|| pay_vo.and_then(|p| p.get("duration")).and_then(|m| m.as_i64()))
@@ -549,11 +551,25 @@ fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
             .or_else(|| body.get("duration").and_then(|m| m.as_i64()))
             .unwrap_or_else(|| minutes_since(&in_time));
 
+        // 弹窗报文里经常既不带 inTime 也不带时长（实测只给车牌/金额/通道），
+        // 此时回查车场自己的算费接口拿真实入场时间与停放时长。
+        let mut final_in_time = in_time;
+        if stay_minute <= 0 || final_in_time.is_empty() {
+            if let Some(info) = fetch_fee_snapshot(server_ip, &car_no) {
+                if stay_minute <= 0 {
+                    stay_minute = info.stay_minute;
+                }
+                if final_in_time.is_empty() {
+                    final_in_time = info.in_time;
+                }
+            }
+        }
+
         let popup = DetectedPopup {
             car_no: car_no.clone(),
             money,
             dsn,
-            in_time,
+            in_time: final_in_time,
             stay_minute,
             channel_name,
             popup_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -571,6 +587,72 @@ fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
         let mut lock = shared_popup.lock().unwrap();
         *lock = None;
     }
+}
+
+/// 从车场算费接口取该车的真实入场时间与停放时长
+///
+/// 出口弹窗报文常常只带车牌/金额/通道，不带 inTime 与时长；
+/// 这时必须回查车场自己的算费接口，否则界面只能显示"未知"。
+fn fetch_fee_snapshot(server_ip: &str, car_no: &str) -> Option<FeeSnapshot> {
+    let trimmed = server_ip.trim();
+    if trimmed.is_empty() || car_no.trim().is_empty() {
+        return None;
+    }
+    let host = if trimmed.contains(':') {
+        trimmed.to_string()
+    } else {
+        format!("{}:8089", trimmed)
+    };
+    let path = format!("/box/fee/current?carNo={}", percent_encode(car_no));
+
+    let mut stream = TcpStream::connect_timeout(
+        &host.parse().ok()?,
+        Duration::from_secs(3),
+    )
+    .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
+
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).ok()?;
+    let resp = String::from_utf8_lossy(&buf);
+
+    let body = match resp.find("\r\n\r\n") {
+        Some(pos) => &resp[pos + 4..],
+        None => return None,
+    };
+    let (start, end) = (body.find('{')?, body.rfind('}')?);
+    let v: serde_json::Value = serde_json::from_str(&body[start..=end]).ok()?;
+
+    if v.get("status").and_then(|s| s.as_i64()) != Some(1) {
+        return None;
+    }
+    let data = v.get("data")?;
+
+    let in_time = data
+        .get("inTime")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let stay_minute = data
+        .get("stayMinute")
+        .and_then(|m| m.as_i64())
+        .unwrap_or_else(|| minutes_since(&in_time));
+
+    Some(FeeSnapshot { in_time, stay_minute })
+}
+
+/// 算费接口给出的该车计费快照
+struct FeeSnapshot {
+    in_time: String,
+    stay_minute: i64,
 }
 
 /// 按入场时间算已停分钟数；时间解析不了或入场时间在未来时返回 0（表示未知）

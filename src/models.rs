@@ -341,6 +341,9 @@ pub struct DetectedPopup {
     pub money: f64,
     pub dsn: String,
     pub in_time: String,
+    /// 已停放时长(分钟)。0 表示车场未给出，界面应显示"未知"而不是编造一个数字。
+    #[serde(default)]
+    pub stay_minute: i64,
     pub channel_name: String,
     pub popup_time: String,
     pub method: String,

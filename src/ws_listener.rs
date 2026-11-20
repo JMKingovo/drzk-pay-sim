@@ -535,22 +535,34 @@ fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
         let in_time = pay_vo
             .and_then(|p| p.get("inTime"))
             .and_then(|t| t.as_str())
+            .or_else(|| out_record.and_then(|o| o.get("inTime")).and_then(|t| t.as_str()))
             .unwrap_or("")
             .to_string();
+
+        // 停放时长：优先用报文里的时长字段；没有就按入场时间实时算，
+        // 绝不用固定值兜底（否则界面会永远显示同一个数字）。
+        let stay_minute = pay_vo
+            .and_then(|p| p.get("stayMinute"))
+            .and_then(|m| m.as_i64())
+            .or_else(|| pay_vo.and_then(|p| p.get("duration")).and_then(|m| m.as_i64()))
+            .or_else(|| out_record.and_then(|o| o.get("stayMinute")).and_then(|m| m.as_i64()))
+            .or_else(|| body.get("duration").and_then(|m| m.as_i64()))
+            .unwrap_or_else(|| minutes_since(&in_time));
 
         let popup = DetectedPopup {
             car_no: car_no.clone(),
             money,
             dsn,
             in_time,
+            stay_minute,
             channel_name,
             popup_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             method: method.to_string(),
         };
 
         println!(
-            "🔔 【实时捕获收费弹窗】车牌: {}, 金额: {:.2} 元, 通道: {}",
-            popup.car_no, popup.money, popup.channel_name
+            "🔔 【实时捕获收费弹窗】车牌: {}, 金额: {:.2} 元, 通道: {}, 已停 {} 分钟",
+            popup.car_no, popup.money, popup.channel_name, popup.stay_minute
         );
 
         let mut lock = shared_popup.lock().unwrap();
@@ -558,6 +570,28 @@ fn parse_and_update_popup(json_text: &str, shared_popup: &SharedPopup) {
     } else if method == "cancelCharge" {
         let mut lock = shared_popup.lock().unwrap();
         *lock = None;
+    }
+}
+
+/// 按入场时间算已停分钟数；时间解析不了或入场时间在未来时返回 0（表示未知）
+pub fn minutes_since(in_time: &str) -> i64 {
+    let trimmed = in_time.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+
+    // 车场时间格式常见两种：带 T 分隔 与 空格分隔
+    let parsed = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S"))
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M"))
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M"));
+
+    match parsed {
+        Ok(t) => {
+            let mins = (Local::now().naive_local() - t).num_minutes();
+            if mins > 0 { mins } else { 0 }
+        }
+        Err(_) => 0,
     }
 }
 
@@ -571,4 +605,42 @@ fn percent_encode(s: &str) -> String {
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minutes_since;
+
+    #[test]
+    fn 按入场时间可算出真实停放分钟数() {
+        // 100 分钟前入场，应得到 100 上下（容忍 1 分钟执行误差）
+        let in_time = (chrono::Local::now().naive_local() - chrono::Duration::minutes(100))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let m = minutes_since(&in_time);
+        assert!((99..=101).contains(&m), "应约为 100 分钟，实际 {}", m);
+    }
+
+    #[test]
+    fn 带T分隔的时间也能解析() {
+        let in_time = (chrono::Local::now().naive_local() - chrono::Duration::minutes(65))
+            .format("%Y-%m-%dT%H:%M:%S")
+            .to_string();
+        let m = minutes_since(&in_time);
+        assert!((64..=66).contains(&m), "应约为 65 分钟，实际 {}", m);
+    }
+
+    #[test]
+    fn 空值或不可解析时返回零而不编造数字() {
+        assert_eq!(minutes_since(""), 0);
+        assert_eq!(minutes_since("不是时间"), 0);
+    }
+
+    #[test]
+    fn 入场时间在未来时不返回负数() {
+        let in_time = (chrono::Local::now().naive_local() + chrono::Duration::minutes(30))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        assert_eq!(minutes_since(&in_time), 0);
+    }
 }

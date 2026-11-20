@@ -739,11 +739,18 @@ fn sniff_latest_popup(server_ip: &str) -> Option<DetectedPopup> {
 
     let in_time = data.get("inTime").and_then(|t| t.as_str()).unwrap_or("").to_string();
 
+    // 车场算费接口直接给 stayMinute；拿不到再按入场时间算，不用固定值兜底
+    let stay_minute = data
+        .get("stayMinute")
+        .and_then(|m| m.as_i64())
+        .unwrap_or_else(|| crate::ws_listener::minutes_since(&in_time));
+
     Some(DetectedPopup {
         car_no: car_no.to_string(),
         money,
         dsn: if dsn.is_empty() { "2211169205100691266100149727978060dcdbdeb56de0ac99d6bb9a3fe718e2".to_string() } else { dsn },
         in_time,
+        stay_minute,
         channel_name: "出口".to_string(),
         popup_time: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         method: "parkOutIsOpen".to_string(),

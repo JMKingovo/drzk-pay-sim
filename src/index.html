@@ -528,7 +528,7 @@
           </div>
           <div class="metric-card">
             <div class="metric-label">停车时长</div>
-            <div class="metric-val" id="heroStay">-- <span style="font-size: 14px;">分钟</span></div>
+            <div class="metric-val" id="heroStay">--</div>
           </div>
         </div>
 
@@ -851,7 +851,11 @@
           badge.innerText = popup.car_no;
 
           heroMoney.innerHTML = `${popup.money.toFixed(2)} <span style="font-size:14px;">元</span>`;
-          heroStay.innerHTML = `${popup.stay_minute || 30} <span style="font-size:14px;">分钟</span>`;
+          // stay_minute 为 0 表示车场没给出时长，如实显示"未知"，不编造数字
+          const stayText = formatStay(popup.stay_minute);
+          heroStay.innerHTML = stayText
+            ? `${stayText}`
+            : `未知`;
           heroChannel.innerText = popup.channel_name || "出口";
           heroInTime.innerText = popup.in_time ? popup.in_time.split(" ")[1] : "未知";
           heroTime.innerText = popup.popup_time.split(" ")[1] || popup.popup_time;
@@ -863,7 +867,7 @@
           badge.className = "plate-badge empty";
           badge.innerText = "正在监听出口道闸出车...";
           heroMoney.innerHTML = `-- <span style="font-size:14px;">元</span>`;
-          heroStay.innerHTML = `-- <span style="font-size:14px;">分钟</span>`;
+          heroStay.innerHTML = `--`;
           heroChannel.innerText = "--";
           heroInTime.innerText = "--";
           heroTime.innerText = "--";
@@ -953,6 +957,25 @@
     function formatClock(d) {
       const p = (n) => String(n).padStart(2, "0");
       return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    // 停车时长展示：按天/小时/分钟分级，返回带单位的完整文案
+    // 例：45 分钟 / 2 小时 5 分钟 / 17 天 3 小时
+    function formatStay(mins) {
+      const total = Math.max(0, Math.floor(mins || 0));
+      if (total <= 0) return "";
+
+      if (total >= 1440) {
+        const d = Math.floor(total / 1440);
+        const h = Math.floor((total % 1440) / 60);
+        return h > 0 ? `${d} 天 ${h} 小时` : `${d} 天`;
+      }
+      if (total >= 60) {
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+        return m > 0 ? `${h} 小时 ${m} 分钟` : `${h} 小时`;
+      }
+      return `${total} 分钟`;
     }
 
     // 步骤 ①：手工车牌查费 (仅更新右侧本身，绝不干扰左侧出口看板)

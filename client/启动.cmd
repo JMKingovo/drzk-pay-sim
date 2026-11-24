@@ -1,16 +1,25 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
 
 echo ============================================================
-echo   道尔车场支付模拟器
+echo   DRZK Parking Payment Simulator
 echo ============================================================
-echo   浏览器会自动打开；如果没有，请手动访问下面显示的地址。
-echo   关闭这个窗口即退出模拟器。
+echo   The browser will open automatically.
+echo   If it does not, open the address printed below manually.
+echo   Close this window to stop the simulator.
 echo.
+
+if not exist "drzk-pay-sim.exe" (
+  echo [ERROR] drzk-pay-sim.exe not found in this folder.
+  echo         Please extract the whole zip again, do not run from inside the zip.
+  echo.
+  pause
+  exit /b 1
+)
 
 drzk-pay-sim.exe %*
 
 echo.
-echo 模拟器已退出。
-pause
+echo Simulator exited. Press any key to close this window.
+pause >nul

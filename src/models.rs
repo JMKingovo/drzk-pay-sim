@@ -79,6 +79,9 @@ pub struct PayResultData {
     /// 车场是否据此生成了出场流水 (park_car_out 同单号)。
     #[serde(default)]
     pub park_out_record: Option<bool>,
+    /// 回查时读到的车场当前编号；与 target_park_no 不一致说明车场被改过
+    #[serde(default)]
+    pub park_no_now: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

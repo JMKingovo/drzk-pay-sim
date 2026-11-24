@@ -584,27 +584,52 @@ fn strip_warnings(text: &str) -> String {
 enum MysqlTarget {
     Host,
     Container(String),
+    /// 同机有多个 MySQL 容器，无法判断该查哪个 (猜错就会读到别的车场的库)
+    Ambiguous(String),
 }
 
 /// 每个车场的 MySQL 执行位置缓存 (探测一次即可，避免每条 SQL 都多一次 SSH)
 static MYSQL_TARGET: RwLock<Option<HashMap<String, MysqlTarget>>> = RwLock::new(None);
 
 fn mysql_target(server_ip: &str) -> MysqlTarget {
+    // 环境变量优先：容器名与车场对不上时用它指定，别靠猜
+    if let Ok(name) = std::env::var("DRZK_DB_CONTAINER") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return MysqlTarget::Container(name.to_string());
+        }
+    }
+
     if let Some(map) = MYSQL_TARGET.read().unwrap().as_ref() {
         if let Some(t) = map.get(server_ip) {
             return t.clone();
         }
     }
 
-    let probe = "if command -v mysql >/dev/null 2>&1; then echo __HOST__; \
-                 else docker ps --format '{{.Names}}' 2>/dev/null | grep -i mysql | head -n 1; fi";
+    // 一台机器上可能同时跑好几个车场（每个车场一套 box+mysql 容器），
+    // 直接取第一个 mysql 容器会读到别的车场的库 —— 必须按 8089 端口的 box 容器配对。
+    let probe = r#"if command -v mysql >/dev/null 2>&1; then echo __HOST__; exit 0; fi
+BOX=$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -F '0.0.0.0:8089->' | head -n 1 | cut -d' ' -f1)
+if [ -n "$BOX" ]; then
+  P=${BOX%-box*}
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${P}-mysql-1"; then echo "CT:${P}-mysql-1"; exit 0; fi
+  C=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i mysql | grep "^${P}" | head -n 1)
+  if [ -n "$C" ]; then echo "CT:$C"; exit 0; fi
+fi
+N=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -ci mysql)
+if [ "$N" = "1" ]; then echo "CT:$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i mysql | head -n 1)"; exit 0; fi
+if [ "$N" = "0" ]; then echo __HOST__; exit 0; fi
+echo "AMBIGUOUS:$(docker ps --format '{{.Names}}' 2>/dev/null | grep -i mysql | tr '\n' ',')""#;
+
     let target = match run_command(server_ip, probe) {
         Ok(out) => {
             let line = out.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
             if line == "__HOST__" {
                 MysqlTarget::Host
-            } else if !line.is_empty() {
-                MysqlTarget::Container(line.to_string())
+            } else if let Some(name) = line.strip_prefix("CT:") {
+                MysqlTarget::Container(name.to_string())
+            } else if let Some(list) = line.strip_prefix("AMBIGUOUS:") {
+                MysqlTarget::Ambiguous(list.to_string())
             } else {
                 MysqlTarget::Host
             }
@@ -634,6 +659,14 @@ pub fn run_sql(server_ip: &str, sql: &str) -> Result<String, String> {
         MysqlTarget::Host => mysql_cmd,
         MysqlTarget::Container(name) => {
             format!("docker exec {} sh -c {}", shell_quote(&name), shell_quote(&mysql_cmd))
+        }
+        MysqlTarget::Ambiguous(list) => {
+            return Err(format!(
+                "车场 {} 上有多个 MySQL 容器，无法确定该查哪一个: {}。\
+                 猜错会读到别的车场的库，因此这里不做选择——请用环境变量 DRZK_DB_CONTAINER 指定容器名。",
+                server_ip,
+                list.trim_end_matches(',')
+            ))
         }
     };
 
@@ -773,6 +806,7 @@ mod tests {
                 billing_context_from_park: false,
                 park_received: None,
                 park_out_record: None,
+                park_no_now: None,
             }
         ];
 

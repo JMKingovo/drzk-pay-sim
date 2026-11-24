@@ -13,4 +13,5 @@ services:
     environment:
       - DRZK_CONFIG_FILE=/data/.drzk-pay-sim.json
       - TZ=Asia/Shanghai
-    command: ["--server", "192.168.65.58", "--no-open"]
+    # 客户端默认只监听 127.0.0.1；容器要被外部访问，必须显式指定 0.0.0.0
+    command: ["--server", "192.168.65.58", "--no-open", "--host", "0.0.0.0"]

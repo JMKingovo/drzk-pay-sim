@@ -158,6 +158,7 @@ pub fn execute_payment(
         billing_context_from_park: billing_from_park,
         park_received: receipt.as_ref().map(|r| r.received),
         park_out_record: receipt.as_ref().map(|r| r.out_record),
+        park_no_now: receipt.as_ref().and_then(|r| r.park_no_now.clone()),
     })
 }
 
@@ -167,6 +168,8 @@ struct ParkReceipt {
     received: bool,
     /// park_car_out 里有该单号 (车场据此生成了正式出场流水)
     out_record: bool,
+    /// 查不到时顺手读到的车场当前编号；与投递时不一致说明车场被改过
+    park_no_now: Option<String>,
 }
 
 /// 支付下发后回查车场数据库
@@ -214,6 +217,7 @@ fn query_park_receipt(server_ip: &str, order_num: &str) -> Option<ParkReceipt> {
                     return Some(ParkReceipt {
                         received: true,
                         out_record: out_rec > 0,
+                        park_no_now: None,
                     });
                 }
             }
@@ -228,10 +232,25 @@ fn query_park_receipt(server_ip: &str, order_num: &str) -> Option<ParkReceipt> {
         Some(ParkReceipt {
             received: false,
             out_record: false,
+            park_no_now: current_park_no(server_ip),
         })
     } else {
         None
     }
+}
+
+/// 读车场当前的真实编号。
+///
+/// 共享测试环境里，车场可能被别的同事重新初始化成另一个编号；
+/// 这时我们投递用的主题已经不存在了，必须把这件事说清楚，而不是只说"查不到单号"。
+fn current_park_no(server_ip: &str) -> Option<String> {
+    let sql = "SELECT parameter_value FROM sys_parameters WHERE parameter_code='PARK_NUM' LIMIT 1;";
+    let out = remote::run_sql(server_ip, sql).ok()?;
+    remote::parse_rows(&out)
+        .first()
+        .and_then(|r| r.first().cloned())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// 该车在车场那边的真实计费上下文 (取自车场自己的算费接口)

@@ -16,6 +16,26 @@ use ws_listener::start_ws_listener;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
+    // --data-dir：配置与支付记录都放到指定目录，同机跑多个实例时互不干扰
+    // 必须在 remote::init 之前生效，否则读到的是默认路径
+    if let Some(i) = args.iter().position(|a| a == "--data-dir") {
+        match args.get(i + 1) {
+            Some(dir) => {
+                let dir = std::path::PathBuf::from(dir);
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    eprintln!("【错误】无法创建数据目录 {}: {}", dir.display(), e);
+                    std::process::exit(1);
+                }
+                env::set_var("DRZK_CONFIG_FILE", dir.join(".drzk-pay-sim.json"));
+                env::set_var("DRZK_HISTORY_FILE", dir.join(".drzk-pay-sim-history.json"));
+            }
+            None => {
+                eprintln!("【错误】--data-dir 后面要跟目录路径");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // 如果指定了 --help 或 -h
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
@@ -30,9 +50,14 @@ fn main() {
         let mut port = "18766".to_string();
         let mut server_ip = String::new();
         let mut no_open = false;
+        // 客户端形态默认只监听本机，避免同网段其他人能打开你的实例（也免掉防火墙弹窗）
+        let mut host = "127.0.0.1".to_string();
         for i in 0..args.len() {
             if (args[i] == "--port" || args[i] == "-p") && i + 1 < args.len() {
                 port = args[i + 1].clone();
+            }
+            if args[i] == "--host" && i + 1 < args.len() {
+                host = args[i + 1].clone();
             }
             if args[i] == "--server" && i + 1 < args.len() {
                 server_ip = args[i + 1].clone();
@@ -141,7 +166,20 @@ fn main() {
         // 岗亭自动跟随：定期复查车场在线岗亭，变了就切过去（界面指定了岗亭则不切）
         ws_listener::start_booth_watcher(shared_config.clone(), 30);
 
-        let browser_url = format!("http://127.0.0.1:{}", port);
+        let base_port: u16 = port.parse().unwrap_or(18766);
+        let (server, actual_port) = match http_server::bind_http_server(&host, base_port, 10) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("【错误】HTTP 服务启动失败，{}~{} 端口都绑定不上: {}", base_port, base_port + 9, e);
+                wait_before_exit();
+                return;
+            }
+        };
+        if actual_port != base_port {
+            println!("  ℹ️ 端口 {} 被占用，已自动改用 {}", base_port, actual_port);
+        }
+
+        let browser_url = format!("http://127.0.0.1:{}", actual_port);
         if !no_open {
             let url_clone = browser_url.clone();
             std::thread::spawn(move || {
@@ -155,8 +193,8 @@ fn main() {
             });
         }
 
-        let addr = format!("0.0.0.0:{}", port);
-        http_server::start_http_server(&addr, shared_config, shared_popup, shared_history);
+        println!("  🌐 请在浏览器打开: {}", browser_url);
+        http_server::start_http_server(server, actual_port, shared_config, shared_popup, shared_history);
         return;
     }
 
@@ -323,6 +361,15 @@ fn print_remote_access(server_ip: &str) {
     println!("============================================================");
 }
 
+/// Windows 上双击启动时，出错后控制台会立刻关闭，用户看不到原因；这里停一下
+fn wait_before_exit() {
+    if cfg!(windows) {
+        eprintln!("按回车键退出...");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+    }
+}
+
 fn print_help() {
     println!(r#"
 道尔云 5.0 - 电子支付模拟与下发工具 (Rust 版)
@@ -349,8 +396,11 @@ fn print_help() {
       --dsn <DSN>          出口通道序列号 (仅出口扫码开闸需填写)
       --auto-out           自动联动目标车场出场放行接口
   -s, --serve              启动 HTTP 接口监听服务
-  -p, --port <端口>        HTTP 服务端口，默认 18766
+  -p, --port <端口>        HTTP 服务端口，默认 18766（被占用时自动顺延）
+      --host <地址>        监听地址，默认 127.0.0.1（只允许本机访问）
+                           要给同网段其他人访问时用 --host 0.0.0.0
       --no-open            启动服务模式时不自动打开浏览器
+      --data-dir <目录>    配置与支付记录存放目录，默认 ~/.drzk-pay-sim.json
 
 远程探测凭据 (车场编号/MQTT 凭证/岗亭信息均通过 SSH + MySQL 实时探测):
       --ssh-user <用户>    SSH 登录用户，默认 root

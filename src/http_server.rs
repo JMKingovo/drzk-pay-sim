@@ -91,19 +91,30 @@ fn park_config_view(server_ip: &str, shared_config: &SharedConfig) -> ParkConfig
     }
 }
 
+/// 绑定监听端口；被占用时顺延试下一个，返回实际监听端口
+///
+/// 客户端形态下每人本机跑一份，18766 常被上一次没退干净的进程占着，
+/// 直接报错退出对双击启动的用户没有任何可操作性，因此自动顺延。
+pub fn bind_http_server(host: &str, port: u16, span: u16) -> Result<(Server, u16), String> {
+    let mut last = String::new();
+    for p in port..port.saturating_add(span) {
+        let addr = format!("{}:{}", host, p);
+        match Server::http(&addr) {
+            Ok(s) => return Ok((s, p)),
+            Err(e) => last = format!("{} ({})", addr, e),
+        }
+    }
+    Err(last)
+}
+
 pub fn start_http_server(
-    addr: &str,
+    server: Server,
+    port: u16,
     shared_config: SharedConfig,
     shared_popup: SharedPopup,
     shared_history: SharedPayHistory,
 ) {
-    let server = match Server::http(addr) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("【错误】HTTP 服务启动失败 (绑定 {}): {}", addr, e);
-            return;
-        }
-    };
+    let addr = format!("127.0.0.1:{}", port);
 
     println!("============================================================");
     println!("  🚀 道尔车场支付模拟器 - HTTP 服务已启动！");
@@ -487,7 +498,7 @@ pub fn start_http_server(
             };
 
             // 请求未指定车场时，采用当前已探测成功的车场；两者皆无则拒绝下发
-            {
+            let target_conflict = {
                 let c = shared_config.lock().unwrap();
                 if pay_req.park_no.trim().is_empty() {
                     pay_req.park_no = c.park_no.clone();
@@ -495,6 +506,31 @@ pub fn start_http_server(
                 if pay_req.server_ip.trim().is_empty() {
                     pay_req.server_ip = c.server_ip.clone();
                 }
+
+                // 支付必须打到"当前已连接的车场"：MQTT 凭证、计费上下文、回查全部按当前车场取，
+                // 目标对不上时会把报文发到别的车场的 broker 上，属于静默错投。
+                let cur_ip = c.server_ip.trim();
+                let cur_park = c.park_no.trim();
+                let req_ip = pay_req.server_ip.trim();
+                let req_park = pay_req.park_no.trim();
+                if !cur_ip.is_empty() && !req_ip.is_empty() && req_ip != cur_ip {
+                    Some(format!(
+                        "支付目标车场 {} 与当前已连接的车场 {} 不一致，报文会用到另一台车场的 MQTT 凭证。请先在顶部点击「连接车场」切换到 {}。",
+                        req_ip, cur_ip, req_ip
+                    ))
+                } else if !cur_park.is_empty() && !req_park.is_empty() && req_park != cur_park {
+                    Some(format!(
+                        "支付车场编号 {} 与当前已连接车场的编号 {} 不一致，请先重新连接车场。",
+                        req_park, cur_park
+                    ))
+                } else {
+                    None
+                }
+            };
+
+            if let Some(msg) = target_conflict {
+                send_json(request, 400, ApiResponse::<()> { code: 400, msg, data: None });
+                continue;
             }
 
             if pay_req.park_no.trim().is_empty() {
@@ -541,12 +577,24 @@ pub fn start_http_server(
                         }
                         Some(false) => {
                             println!("  -> 车场未收到该笔缴费，单号: {}", result.order_num);
-                            let why = if cloud_off {
-                                "车场未开启云端，不会订阅支付主题，报文被 broker 丢弃"
-                            } else {
-                                "车场数据库里查不到该单号"
+                            let drift = match result.park_no_now.as_deref() {
+                                Some(now) if !now.is_empty() && now != result.target_park_no => Some(now),
+                                _ => None,
                             };
-                            format!("报文已发出，但{}（单号 {}）", why, result.order_num)
+                            match (drift, cloud_off) {
+                                (Some(now), _) => format!(
+                                    "报文已发出，但车场编号已经变成 {}（投递时是 {}），旧主题上没有订阅者。车场可能被重新初始化过，请重新点击「连接车场」（单号 {}）",
+                                    now, result.target_park_no, result.order_num
+                                ),
+                                (None, true) => format!(
+                                    "报文已发出，但车场未开启云端，不会订阅支付主题，报文被 broker 丢弃（单号 {}）",
+                                    result.order_num
+                                ),
+                                (None, false) => format!(
+                                    "报文已发出，但车场数据库里查不到该单号（单号 {}）",
+                                    result.order_num
+                                ),
+                            }
                         }
                         None => {
                             println!("  -> 无法校验车场回执（SSH/数据库不可用），单号: {}", result.order_num);

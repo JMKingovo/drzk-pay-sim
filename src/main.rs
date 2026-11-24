@@ -60,6 +60,7 @@ fn main() {
             mqtt_user: String::new(),
             mqtt_pwd: String::new(),
             park_config_source: "未配置".to_string(),
+            cloud_enabled: None,
         };
 
         // 优先自动探测(SSH+MySQL)；探测不通时退回该车场已保存的手填参数；
@@ -90,6 +91,7 @@ fn main() {
                     cfg.mqtt_host = d.mqtt_host;
                     cfg.mqtt_user = d.mqtt_user;
                     cfg.mqtt_pwd = d.mqtt_pwd;
+                    cfg.cloud_enabled = d.cloud_enabled;
                     cfg.park_config_source = "自动探测".to_string();
                     cfg.status_text = if no_booth {
                         format!("车场 {} 已探测 (编号 {})，但未取到岗亭信息，无法监听出口出车；可重新点击「连接车场」重试", server_ip, d.park_no)
@@ -110,6 +112,7 @@ fn main() {
                             cfg.mqtt_host = d.mqtt_host;
                             cfg.mqtt_user = d.mqtt_user;
                             cfg.mqtt_pwd = d.mqtt_pwd;
+                            cfg.cloud_enabled = d.cloud_enabled;
                             cfg.park_config_source = "手动配置".to_string();
                             cfg.status_text = if no_booth {
                                 format!("已按手填参数接入 {} (车场 {})，但未填岗亭，无法监听出口出车", server_ip, d.park_no)

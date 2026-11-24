@@ -223,7 +223,21 @@ brew install mingw-w64
 
 ### 1. 为什么模拟器提示支付成功，但车场没有任何记录？
 
-本工具的“注入成功”是指报文已成功由 MQTT 协议发布到了指定的 EMQX Broker 对应主题 `server/data/publish/phone/<park_no>`。如果车场并未写入记录，请按以下顺序排查车场本身状态：
+本工具的成功判定以**车场回执**为准：报文经 MQTT 发布到 `server/data/publish/phone/<park_no>` 后，工具会按本次单号
+（`paymentTnx`）回查车场数据库：
+
+```sql
+SELECT (SELECT COUNT(*) FROM park_central_charge WHERE order_num='<单号>'),
+       (SELECT COUNT(*) FROM park_car_out        WHERE order_num='<单号>');
+```
+
+- `park_central_charge` 有该单号 → **车场已收到**这笔钱
+- `park_car_out` 也有该单号 → 车场还生成了**正式出场流水**
+- 两者都没有 → **车场没有收到**（接口返回里会直接写明原因）
+- SSH/数据库不可用 → 显示“无法校验”，**不会假装成功**
+
+> MQTT `publish` 返回成功只代表消息交给了 Broker。车场若没订阅该主题，Broker 会静默丢弃，
+> 发布端看不出任何异常 —— 这正是“工具里有记录、车场里没流水”的由来。
 
 #### ① 车场是否关闭了“云端总开关”（最常见根因）
 车场 Java 核心程序 `/wasHome/server/box.jar`（内部 `PayClientMQTT.class`）对云端消息订阅有硬性前置判断：
@@ -250,6 +264,7 @@ private String[] cloudTopics() {
   ```
 - 若任意一项为 `0`，车场会自动退回连接本机的 `tcp://127.0.0.1:1883`，并且**彻底取消对云端支付主题的监听**，此时云端发布的任何支付消息车场均无法接收。
 - **解决办法：** 在车场后台开启“上传数据云端”与“云端总开关”，或将这两个参数置为 `1` 并重启车场 `box.jar`（`service server restart`）。
+- 连接车场时工具会自动读这两个参数：关闭时顶部会显示红色「云端未开启（注入无人接收）」，注入后回执也会写明报文被 Broker 丢弃。
 
 #### ② 支付 MQTT Broker 地址是否一致
 - 车场实际连接的 Broker 地址取自 `sys_parameters` 中的 `MQTT_SETTING_PAY_URL_ONLINE`；
@@ -266,6 +281,13 @@ private String[] cloudTopics() {
   tail -f /wasHome/server/logs/MQTTReceived.log
   ```
   正常收到支付时会打印：`c.d.m.MqttReceiptServiceImpl:receiveMsgFromCloud - 云端下发数据是：topic=server/data/publish/phone/<park_no>, message=...`。若此日志无输出，说明消息根本未从 Broker 到达车场。
+
+#### ④ 车场是容器化部署的（宿主机没有 mysql 客户端）
+
+有些测试车场（例如 drtest 上的 `parking07`）把 MySQL 跑在 Docker 里，宿主机执行 `mysql` 会报
+`command not found`，探测与回查都会失败。工具会自动探测：宿主机没有 `mysql` 时改用
+`docker ps | grep -i mysql` 找到数据库容器，再 `docker exec <容器> mysql ...` 执行查询，无需额外配置。
+若容器名不含 `mysql`，则仍需在宿主机装一个 mysql 客户端。
 
 ---
 

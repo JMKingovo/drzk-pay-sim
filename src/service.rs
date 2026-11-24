@@ -132,6 +132,10 @@ pub fn execute_payment(
     client.publish(&topic, &message)?;
     client.disconnect();
 
+    // publish 成功只代表消息交给了 broker。车场若没订阅该主题 (例如未开启云端)，
+    // broker 会直接丢弃，工具这边看不出任何异常 —— 因此按单号回查车场数据库确认。
+    let receipt = verify_park_receipt(&req.server_ip, &order_num);
+
     // 如果开启了 auto_out，联动调用目标车场的出场放行接口
     let auto_out_res = if req.auto_out {
         Some(trigger_auto_out(&req.server_ip, &req.car_no, &req.dsn))
@@ -152,7 +156,82 @@ pub fn execute_payment(
         auto_out_result: auto_out_res,
         is_lane: is_lane_pay,
         billing_context_from_park: billing_from_park,
+        park_received: receipt.as_ref().map(|r| r.received),
+        park_out_record: receipt.as_ref().map(|r| r.out_record),
     })
+}
+
+/// 车场回执：这笔缴费在车场数据库里的落地情况
+struct ParkReceipt {
+    /// park_central_charge 里有该单号 (钱真的进了车场)
+    received: bool,
+    /// park_car_out 里有该单号 (车场据此生成了正式出场流水)
+    out_record: bool,
+}
+
+/// 支付下发后回查车场数据库
+///
+/// 返回 None 表示"无法校验"（SSH 不通 / 没配数据库），绝不臆测成成功。
+/// 整个回查放在子线程里做，并限制总耗时，避免 SSH 抖动把支付响应拖住。
+fn verify_park_receipt(server_ip: &str, order_num: &str) -> Option<ParkReceipt> {
+    if server_ip.trim().is_empty() || order_num.trim().is_empty() {
+        return None;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ip = server_ip.to_string();
+    let no = order_num.to_string();
+    std::thread::spawn(move || {
+        let _ = tx.send(query_park_receipt(&ip, &no));
+    });
+
+    // 车场落库通常在 1 秒内完成；给 8 秒窗口，超时按"无法校验"处理
+    rx.recv_timeout(Duration::from_secs(8)).ok().flatten()
+}
+
+fn query_park_receipt(server_ip: &str, order_num: &str) -> Option<ParkReceipt> {
+    // 聚合查询即使查不到也会返回一行 (0,0)，不会被 parse_rows 当成表头丢掉
+    let sql = format!(
+        "SELECT (SELECT COUNT(*) FROM park_central_charge WHERE order_num='{0}'), \
+                (SELECT COUNT(*) FROM park_car_out WHERE order_num='{0}');",
+        order_num
+    );
+
+    let mut queried = false;
+    for attempt in 0..3 {
+        if let Ok(out) = remote::run_sql(server_ip, &sql) {
+            queried = true;
+            if let Some(row) = remote::parse_rows(&out).first() {
+                let charge = row
+                    .first()
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+                    .unwrap_or(0);
+                let out_rec = row
+                    .get(1)
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+                    .unwrap_or(0);
+                if charge > 0 || out_rec > 0 {
+                    return Some(ParkReceipt {
+                        received: true,
+                        out_record: out_rec > 0,
+                    });
+                }
+            }
+        }
+        if attempt < 2 {
+            std::thread::sleep(Duration::from_millis(1200));
+        }
+    }
+
+    // 查询确实执行过但查不到 → 明确未到达；一次都没查成 → 无法校验
+    if queried {
+        Some(ParkReceipt {
+            received: false,
+            out_record: false,
+        })
+    } else {
+        None
+    }
 }
 
 /// 该车在车场那边的真实计费上下文 (取自车场自己的算费接口)

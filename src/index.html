@@ -553,7 +553,7 @@
     <div class="panel">
       <div class="panel-header">
         <h2>支付通道配置与场内工具</h2>
-        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">--</strong><span id="parkSourceTag" style="margin-left:4px; color:#b45309;"></span></span>
+        <span style="font-size: 12px; color: var(--text-muted);">车场编号: <strong id="displayParkNo">--</strong><span id="parkSourceTag" style="margin-left:4px; color:#b45309;"></span><span id="cloudTag" style="margin-left:6px;"></span></span>
       </div>
 
       <!-- 1. 全局支付方式选择 -->
@@ -764,6 +764,7 @@
           localStorage.setItem("last_server_ip", serverIp);
           document.getElementById("displayParkNo").innerText = fmtParkNo(res.data.park_no);
           document.getElementById("parkSourceTag").innerText = fmtParkSource(res.data.park_config_source);
+          applyCloudTag(res.data.cloud_enabled);
           navStatus.innerText = res.data.status_text || ("已连接 " + serverIp);
           dot.style.background = res.data.is_connected ? "#10b981" : "#f59e0b";
           // 已切换车场，旧车场查到的费用一律作废
@@ -792,6 +793,7 @@
           const cfg = res.data;
           document.getElementById("displayParkNo").innerText = fmtParkNo(cfg.park_no);
           document.getElementById("parkSourceTag").innerText = fmtParkSource(cfg.park_config_source);
+          applyCloudTag(cfg.cloud_enabled);
           document.getElementById("navWsStatus").innerText = cfg.status_text;
           const dot = document.getElementById("wsIndicator");
           dot.style.background = cfg.is_connected ? "#10b981" : "#ef4444";
@@ -916,7 +918,14 @@
         const data = await resp.json();
         if (data.code === 200 && data.data) {
           loadPayHistory();
-          showToast(`开闸放行成功！[${carNo}] 代缴 ${money.toFixed(2)} 元，已开闸放行并更新流水`, "success");
+          const r = receiptOf(data.data);
+          if (r.ok === true) {
+            showToast(`[${carNo}] 代缴 ${money.toFixed(2)} 元已下发，${r.text}`, "success", 4000);
+          } else if (r.ok === false) {
+            showToast(`[${carNo}] 报文已发出，但${r.text}，车场不会生成流水`, "error", 6000);
+          } else {
+            showToast(`[${carNo}] 报文已发出，${r.text}`, "warning", 5000);
+          }
           setTimeout(() => pollPopup(true), 1500);
         } else {
           showToast("开闸放行失败: " + (data.msg || "未知错误"), "error", 4500);
@@ -1066,7 +1075,14 @@
         const data = await resp.json();
         if (data.code === 200 && data.data) {
           loadPayHistory();
-          showToast(`场内预缴成功！[${carNo}] 预缴 ${money.toFixed(2)} 元，已生成线上流水，车仍在场内。`, "success", 4000);
+          const r = receiptOf(data.data);
+          if (r.ok === true) {
+            showToast(`[${carNo}] 场内预缴 ${money.toFixed(2)} 元已下发，${r.text}`, "success", 4000);
+          } else if (r.ok === false) {
+            showToast(`[${carNo}] 报文已发出，但${r.text}，车场不会生成流水`, "error", 6000);
+          } else {
+            showToast(`[${carNo}] 报文已发出，${r.text}`, "warning", 5000);
+          }
           // 该笔费用已结清，作废本次查费结果，再次下单需重新查费
           resetInnerFee("预缴已完成，再次预缴请重新查费");
         } else {
@@ -1082,6 +1098,19 @@
     }
 
     // ============ 支付记录（持久化落盘，重启也不会丢失）============
+    // 车场回执：MQTT 下发成功 ≠ 车场收到。ok=true/false/null(无法校验)
+    function receiptOf(d) {
+      if (d.park_received === true) {
+        return d.park_out_record === true
+          ? { ok: true, text: "车场已收到并生成出场流水" }
+          : { ok: true, text: "车场已收到，但未生成出场流水（通道当时没有这台车的出场事件）" };
+      }
+      if (d.park_received === false) {
+        return { ok: false, text: "车场没有收到这笔缴费" };
+      }
+      return { ok: null, text: "无法校验车场是否收到（SSH/数据库不可用）" };
+    }
+
     async function loadPayHistory() {
       try {
         const res = await (await fetch("/api/pay/history")).json();
@@ -1108,10 +1137,16 @@
       count.innerText = "共 " + list.length + " 笔（最新在前）";
       box.innerHTML = list.map(d => {
         const scene = d.is_lane ? "出口扫码放行" : "场内扫码预缴";
-        const warn = d.auto_out_result && /中止|失败/.test(d.auto_out_result);
+        const receipt = receiptOf(d);
+        const warn = (d.auto_out_result && /中止|失败/.test(d.auto_out_result)) || receipt.ok === false;
         const autoOutText = d.auto_out_result
           ? (warn ? "⚠ 出场联动未完成：" + d.auto_out_result : "出场联动：" + d.auto_out_result)
           : "";
+        const receiptTip = receipt.ok === true
+          ? `<span style="color:#047857; font-weight:500;">车场回执：${escapeHtml(receipt.text)}</span>`
+          : (receipt.ok === false
+              ? `<span style="color:#b91c1c; font-weight:600;">车场回执：${escapeHtml(receipt.text)}</span>`
+              : `<span style="color:#b45309;">${escapeHtml(receipt.text)}</span>`);
         const ctxTip = d.is_lane && !d.billing_context_from_park
           ? "<span style='color:#b45309;'>（未取到真实计费上下文，可能被记为定点收费）</span>"
           : "";
@@ -1128,6 +1163,7 @@
             <div class="pay-detail">
               <span>${escapeHtml(d.pay_type_name)} · ${escapeHtml(scene)}</span>
               ${autoOutText ? `<span style="margin-left: 8px; color: ${warn ? "#b91c1c" : "var(--primary)"}; font-weight: 500;">${escapeHtml(autoOutText)}</span>` : ""}
+              <span style="margin-left: 8px;">${receiptTip}</span>
               ${ctxTip}
             </div>
             <div class="pay-order">${escapeHtml(d.order_num)} · ${escapeHtml(d.target_park_no || "")}</div>
@@ -1178,6 +1214,22 @@
       if (!v || v === "未配置" || v === "未接入") return "";
       if (v === "手动配置") return "· 手填值（MQTT 凭证未探测）";
       return "· " + v;
+    }
+
+    // 云端开关：关闭时车场不订阅支付主题，注入的报文没人收
+    function fmtCloud(v) {
+      if (v === true) return "";
+      if (v === false) return "· 云端未开启（注入无人接收）";
+      return "";
+    }
+
+    function applyCloudTag(v) {
+      const tag = document.getElementById("cloudTag");
+      if (!tag) return;
+      const text = fmtCloud(v);
+      tag.innerText = text;
+      tag.style.color = v === false ? "#b91c1c" : "var(--text-muted)";
+      tag.style.fontWeight = v === false ? "600" : "400";
     }
 
     // ============ 连接配置弹窗（SSH / 数据库 / 车场参数）============

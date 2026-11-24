@@ -72,6 +72,13 @@ pub struct PayResultData {
     /// 车场编号是否由本次报文的计费上下文确认为真实入场记录
     #[serde(default)]
     pub billing_context_from_park: bool,
+    /// 车场是否真的收到了这笔缴费 (按单号回查 park_central_charge)。
+    /// None = 无法校验 (SSH 不通)，不代表成功。
+    #[serde(default)]
+    pub park_received: Option<bool>,
+    /// 车场是否据此生成了出场流水 (park_car_out 同单号)。
+    #[serde(default)]
+    pub park_out_record: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +95,11 @@ pub struct ServerConfig {
     /// 车场参数来源: 自动探测 / 手动配置 / 未配置
     #[serde(default)]
     pub park_config_source: String,
+    /// 车场是否开启了云端 (MQTT_SETTING_CLOUD_ON_OFF / UPLOAD_DATA_CLOUD)。
+    /// 关闭时车场不会订阅 server/data/publish/phone/<park>，注入的支付无人接收。
+    /// None = 未探测到 (手动配置且从未探测过)。
+    #[serde(default)]
+    pub cloud_enabled: Option<bool>,
 }
 
 /// 从目标车场服务器数据库探测到的真实信息
@@ -109,6 +121,9 @@ pub struct ParkDetails {
     /// 该车场已知的岗亭清单 (供界面下拉选择)
     #[serde(default)]
     pub booths: Vec<Booth>,
+    /// 车场是否开启云端。关闭时车场不订阅支付主题，注入的报文无人接收。
+    #[serde(default)]
+    pub cloud_enabled: Option<bool>,
 }
 
 /// 车场的一个岗亭
@@ -176,6 +191,9 @@ pub struct ParkOverride {
     /// 该车场已知的岗亭清单 (探测到后记下，供界面下拉选择；没有 SSH 时也能选)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub booths: Vec<Booth>,
+    /// 上次探测到的云端开关状态 (没有 SSH 时沿用，仅供告警提示)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_enabled: Option<bool>,
 }
 
 impl ParkOverride {
@@ -210,6 +228,7 @@ impl ParkOverride {
             mqtt_user: self.mqtt_user.clone().unwrap_or_default(),
             mqtt_pwd: self.mqtt_pwd.clone().unwrap_or_default(),
             booths: self.booths.clone(),
+            cloud_enabled: self.cloud_enabled,
         }
     }
 
@@ -241,6 +260,7 @@ impl ParkOverride {
         if !d.booths.is_empty() {
             self.booths = d.booths.clone();
         }
+        self.cloud_enabled = d.cloud_enabled;
     }
 
     /// 是否有手填值与探测值不一致 (用于界面提示，避免静默以某一方为准)
@@ -374,6 +394,7 @@ mod tests {
             mqtt_user: "u".to_string(),
             mqtt_pwd: "p".to_string(),
             booths: Vec::new(),
+            cloud_enabled: None,
         }
     }
 

@@ -243,6 +243,7 @@ pub fn start_http_server(
                 c.mqtt_host = values.mqtt_host.clone();
                 c.mqtt_user = values.mqtt_user.clone();
                 c.mqtt_pwd = values.mqtt_pwd.clone();
+                c.cloud_enabled = values.cloud_enabled;
                 c.clone()
             };
 
@@ -526,7 +527,33 @@ pub fn start_http_server(
 
             match execute_payment(&pay_req, &mqtt_host, &mqtt_user, &mqtt_pwd) {
                 Ok(result) => {
-                    println!("  -> 注入成功！单号: {}", result.order_num);
+                    let cloud_off = { shared_config.lock().unwrap().cloud_enabled == Some(false) };
+
+                    // 报文发出 ≠ 车场收到：按单号回查车场库，结论以回执为准
+                    let msg = match result.park_received {
+                        Some(true) if result.park_out_record == Some(true) => {
+                            println!("  -> 车场已收到并生成出场流水，单号: {}", result.order_num);
+                            "车场已收到该笔缴费，并生成了正式出场流水".to_string()
+                        }
+                        Some(true) => {
+                            println!("  -> 车场已收到该笔缴费（未生成出场流水），单号: {}", result.order_num);
+                            "车场已收到该笔缴费，但没有生成出场流水（通道当时没有这台车的出场事件）".to_string()
+                        }
+                        Some(false) => {
+                            println!("  -> 车场未收到该笔缴费，单号: {}", result.order_num);
+                            let why = if cloud_off {
+                                "车场未开启云端，不会订阅支付主题，报文被 broker 丢弃"
+                            } else {
+                                "车场数据库里查不到该单号"
+                            };
+                            format!("报文已发出，但{}（单号 {}）", why, result.order_num)
+                        }
+                        None => {
+                            println!("  -> 无法校验车场回执（SSH/数据库不可用），单号: {}", result.order_num);
+                            "报文已发出，但无法校验车场是否收到（SSH/数据库不可用）".to_string()
+                        }
+                    };
+
                     {
                         let mut lock = shared_popup.lock().unwrap();
                         *lock = None;
@@ -543,7 +570,7 @@ pub fn start_http_server(
 
                     send_json(request, 200, ApiResponse {
                         code: 200,
-                        msg: "支付结果已成功注入到目标车场".to_string(),
+                        msg,
                         data: Some(result),
                     });
                 }
@@ -633,6 +660,7 @@ pub fn start_http_server(
                     "is_connected": cfg.is_connected,
                     "status_text": cfg.status_text,
                     "park_config_source": cfg.park_config_source,
+                    "cloud_enabled": cfg.cloud_enabled,
                     "mqtt_host": cfg.mqtt_host,
                     "mqtt_user": cfg.mqtt_user,
                     "mqtt_pwd_set": !cfg.mqtt_pwd.is_empty(),

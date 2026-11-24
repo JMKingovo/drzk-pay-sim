@@ -103,7 +103,7 @@ pub fn start_ws_listener(shared_config: SharedConfig, shared_popup: SharedPopup)
 pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
     // 1. 查系统参数中的 PARK_NUM 和支付 MQTT Broker 配置
     let sql_params = "SELECT parameter_code, parameter_value FROM sys_parameters \
-        WHERE parameter_code IN ('PARK_NUM', 'MQTT_SETTING_PAY_URL_ONLINE', 'MQTT_SETTING_PAY_USERNAME', 'MQTT_SETTING_PAY_PASSWORD');";
+        WHERE parameter_code IN ('PARK_NUM', 'MQTT_SETTING_PAY_URL_ONLINE', 'MQTT_SETTING_PAY_USERNAME', 'MQTT_SETTING_PAY_PASSWORD', 'MQTT_SETTING_CLOUD_ON_OFF', 'UPLOAD_DATA_CLOUD');";
 
     let params_out = remote::run_sql(server_ip, sql_params)
         .map_err(|e| format!("读取车场参数失败: {}", e))?;
@@ -112,6 +112,8 @@ pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
     let mut mqtt_host = String::new();
     let mut mqtt_user = String::new();
     let mut mqtt_pwd = String::new();
+    let mut cloud_on_off: Option<String> = None;
+    let mut upload_cloud: Option<String> = None;
 
     for row in remote::parse_rows(&params_out) {
         if row.len() < 2 {
@@ -132,8 +134,26 @@ pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
             }
             "MQTT_SETTING_PAY_USERNAME" => mqtt_user = row[1].clone(),
             "MQTT_SETTING_PAY_PASSWORD" => mqtt_pwd = row[1].clone(),
+            "MQTT_SETTING_CLOUD_ON_OFF" => cloud_on_off = Some(row[1].clone()),
+            "UPLOAD_DATA_CLOUD" => upload_cloud = Some(row[1].clone()),
             _ => {}
         }
+    }
+
+    // 云端关闭时车场不会连云端 Broker、也不会订阅 server/data/publish/phone/<park>，
+    // 此时注入的支付报文没有任何订阅者，broker 直接丢弃 —— 必须让使用者看得见。
+    let cloud_enabled = match (cloud_on_off.as_deref(), upload_cloud.as_deref()) {
+        (None, None) => None,
+        (a, b) => Some(a == Some("1") || b == Some("1")),
+    };
+    if cloud_enabled == Some(false) {
+        println!(
+            "  ⚠️ 车场 {} 未开启云端 (MQTT_SETTING_CLOUD_ON_OFF={}, UPLOAD_DATA_CLOUD={})：\
+             该车场不会订阅支付主题，注入的报文无人接收",
+            server_ip,
+            cloud_on_off.as_deref().unwrap_or("?"),
+            upload_cloud.as_deref().unwrap_or("?")
+        );
     }
 
     if park_no.is_empty() {
@@ -175,6 +195,7 @@ pub fn probe_server_details(server_ip: &str) -> Result<ParkDetails, String> {
         mqtt_user,
         mqtt_pwd,
         booths,
+        cloud_enabled,
     })
 }
 

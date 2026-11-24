@@ -576,17 +576,66 @@ fn strip_warnings(text: &str) -> String {
         .to_string()
 }
 
+/// MySQL 客户端在目标机上的执行位置
+///
+/// 有的车场 (例如 Docker 部署的 parking07) 宿主机上没有 mysql 客户端，
+/// 数据库跑在容器里，必须 docker exec 进去才能查。
+#[derive(Clone, PartialEq)]
+enum MysqlTarget {
+    Host,
+    Container(String),
+}
+
+/// 每个车场的 MySQL 执行位置缓存 (探测一次即可，避免每条 SQL 都多一次 SSH)
+static MYSQL_TARGET: RwLock<Option<HashMap<String, MysqlTarget>>> = RwLock::new(None);
+
+fn mysql_target(server_ip: &str) -> MysqlTarget {
+    if let Some(map) = MYSQL_TARGET.read().unwrap().as_ref() {
+        if let Some(t) = map.get(server_ip) {
+            return t.clone();
+        }
+    }
+
+    let probe = "if command -v mysql >/dev/null 2>&1; then echo __HOST__; \
+                 else docker ps --format '{{.Names}}' 2>/dev/null | grep -i mysql | head -n 1; fi";
+    let target = match run_command(server_ip, probe) {
+        Ok(out) => {
+            let line = out.lines().map(|l| l.trim()).find(|l| !l.is_empty()).unwrap_or("");
+            if line == "__HOST__" {
+                MysqlTarget::Host
+            } else if !line.is_empty() {
+                MysqlTarget::Container(line.to_string())
+            } else {
+                MysqlTarget::Host
+            }
+        }
+        Err(_) => MysqlTarget::Host,
+    };
+
+    let mut lock = MYSQL_TARGET.write().unwrap();
+    lock.get_or_insert_with(HashMap::new)
+        .insert(server_ip.to_string(), target.clone());
+    target
+}
+
 /// 在目标车场服务器本机执行一条 MySQL 查询，返回制表符分隔的结果文本
 pub fn run_sql(server_ip: &str, sql: &str) -> Result<String, String> {
     let cfg = current();
     // 合并 stderr，让 MySQL 的报错 (如 Access denied) 能原样回传给使用者
-    let remote_cmd = format!(
-        "PAGER=cat mysql -u{} -p{} {} -B -e \"{}\" 2>&1",
+    let mysql_cmd = format!(
+        "PAGER=cat mysql --default-character-set=utf8mb4 -u{} -p{} {} -B -e \"{}\" 2>&1",
         shell_quote(&cfg.db_user),
         shell_quote(&cfg.db_pwd),
         shell_quote(&cfg.db_name),
         sql
     );
+
+    let remote_cmd = match mysql_target(server_ip) {
+        MysqlTarget::Host => mysql_cmd,
+        MysqlTarget::Container(name) => {
+            format!("docker exec {} sh -c {}", shell_quote(&name), shell_quote(&mysql_cmd))
+        }
+    };
 
     let stdout = run_command(server_ip, &remote_cmd)?;
 
@@ -722,6 +771,8 @@ mod tests {
                 auto_out_result: None,
                 is_lane: false,
                 billing_context_from_park: false,
+                park_received: None,
+                park_out_record: None,
             }
         ];
 
